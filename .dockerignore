@@ -1,0 +1,16 @@
+.git
+.gitignore
+node_modules
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+test/
+TODO.md
+ROADMAP-OPEN.md
+CHANGELOG.md
+CONTRIBUTING.md
+README.md
+LICENSE
+init-repo.sh

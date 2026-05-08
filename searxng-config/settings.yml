@@ -1,0 +1,108 @@
+# SearXNG configuration for use with searxng-cited-mcp.
+# Reference: https://docs.searxng.org/admin/settings/settings.html
+
+general:
+  debug: false
+  instance_name: "searxng-cited-mcp"
+
+brand: {}
+
+doi_resolvers:
+  oadoi.org: 'https://oadoi.org/'
+  doi.org: 'https://doi.org/'
+
+default_doi_resolver: 'oadoi.org'
+
+server:
+  # Overridden at runtime via SEARXNG_SECRET_KEY env var (see docker-compose.yml)
+  secret_key: "change-me-via-env"
+  bind_address: "0.0.0.0"
+  port: 8080
+  base_url: http://localhost:8888
+  image_proxy: false
+  http_protocol_version: "1.0"
+
+ui:
+  static_use_hash: true
+  default_locale: "en"
+  query_in_title: false
+  infinite_scroll: false
+  center_alignment: false
+  theme_args:
+    simple_style: auto
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "auto"
+  # JSON format must be enabled explicitly — searxng-cited-mcp uses it.
+  formats:
+    - html
+    - json
+
+# Engines: stable, no-login sources.
+# `weight` boosts qualitative sources in the result ranking.
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    timeout: 3.0
+    weight: 1.5
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    timeout: 3.0
+    weight: 1.5
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    timeout: 3.0
+    weight: 1.0
+
+  - name: bing
+    engine: bing
+    shortcut: b
+    timeout: 3.0
+    weight: 1.0
+
+  # Strong factual signal
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    timeout: 3.0
+    weight: 2.0
+
+  # Academic sources — used by cited_science_search
+  - name: semantic scholar
+    engine: semantic_scholar
+    shortcut: ss
+    timeout: 5.0
+    weight: 1.5
+
+  - name: arxiv
+    engine: arxiv
+    shortcut: arx
+    timeout: 5.0
+    weight: 1.5
+
+  - name: pubmed
+    engine: pubmed
+    shortcut: pm
+    timeout: 5.0
+    weight: 1.5
+
+  - name: google scholar
+    engine: google_scholar
+    shortcut: gs
+    timeout: 5.0
+    weight: 1.5
+
+outgoing:
+  request_timeout: 5.0
+  max_request_timeout: 10.0
+  useragent_suffix: ""
+  pool_connections: 100
+  pool_maxsize: 20
+  enable_http2: true

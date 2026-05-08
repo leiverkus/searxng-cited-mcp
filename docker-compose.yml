@@ -1,0 +1,54 @@
+services:
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    ports:
+      - "8888:8080"
+    volumes:
+      - ./searxng-config:/etc/searxng:rw
+    environment:
+      - SEARXNG_SECRET_KEY=${SEARXNG_SECRET_KEY}
+      - SEARXNG_BASE_URL=http://localhost:8888
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  searxng-cited-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: searxng-cited-mcp
+    restart: unless-stopped
+    environment:
+      - SEARXNG_URL=http://searxng:8080
+      - SEARXNG_DEFAULT_LANG=${SEARXNG_DEFAULT_LANG:-en}
+      # HTTP transport on :3333 by default (set in Dockerfile).
+      # For stdio mode, override with MCP_TRANSPORT=stdio and use
+      #   docker exec -i searxng-cited-mcp node index.js
+      - MCP_TRANSPORT=${MCP_TRANSPORT:-http}
+    ports:
+      # Only relevant when MCP_TRANSPORT=http. Bind to 127.0.0.1 by default
+      # so it's not exposed publicly; remove the IP prefix to expose.
+      - "127.0.0.1:3333:3333"
+    volumes:
+      # Persist the @xenova/transformers MiniLM model across restarts
+      # so it doesn't re-download every time.
+      - transformers-cache:/app/.cache/transformers
+    depends_on:
+      - searxng
+    # Needed when running in MCP_TRANSPORT=stdio mode with `docker exec -i`
+    stdin_open: true
+    tty: false
+
+volumes:
+  transformers-cache:
