@@ -1,8 +1,8 @@
 # searxng-cited-mcp
 
-An [MCP](https://modelcontextprotocol.io/) server that connects AI coding agents to a local [SearXNG](https://docs.searxng.org/) instance — with **structured, numbered citations** baked into every response.
+An [MCP](https://modelcontextprotocol.io/) server that connects AI coding agents to a local [SearXNG](https://docs.searxng.org/) instance — with **structured, source-labelled citations** baked into every response.
 
-Unlike generic search MCPs, this one is designed so the LLM can reference sources with `[n]` markers in its answer and produce a clean "Sources:" section at the end, similar to how Claude Code and Perplexity handle web search.
+Unlike generic search MCPs, this one is designed so the LLM can reference sources with `(hostname)` markers in its answer — e.g. `(example.com)` or `(en.wikipedia.org — Roman Empire)` when several results share the same domain — and produce a clean "Sources:" section at the end, similar to how Claude Code and Perplexity handle web search.
 
 ## Why?
 
@@ -10,7 +10,7 @@ Most search MCP servers return raw results and leave citation formatting to the 
 
 **searxng-cited-mcp** solves this by:
 
-- Returning results in a **pre-formatted, numbered layout** the model can reference directly
+- Returning results in a **pre-formatted layout with source-derived labels** the model can reference directly
 - Appending a ready-made **Sources block** with markdown links
 - Including an **instruction line** that tells the model how to cite
 - **Semantically reranking** the top hits with a small local embedding model so the highest-scoring passages float to the top (Exa-style highlights)
@@ -38,31 +38,33 @@ The model is loaded lazily and pre-warmed on startup. With Docker the cache is p
 ```
 ## Search results for: "archaeological survey methods"
 
-**[1] Remote Sensing in Archaeology** (2024-11-20) [google scholar] _(relevance: 0.812)_
-https://example.org/remote-sensing
+**(jstor.org) Remote Sensing in Archaeology** (2024-11-20) [google scholar] _(relevance: 0.812)_
+https://jstor.org/stable/remote-sensing
 A comprehensive review of satellite and drone-based survey methods…
 
-<highlights source="[1]">
+<highlights source="(jstor.org)">
 - (0.812) Recent UAV-based photogrammetry workflows reduce the cost of high-resolution
   topographic mapping by an order of magnitude compared to traditional total-station survey.
 - (0.764) Combining LiDAR with multispectral imagery exposes sub-surface features invisible
   to ground-level inspection, particularly in densely vegetated regions.
 </highlights>
 
-**[2] Ground-Penetrating Radar: Best Practices** _(relevance: 0.701)_
-https://example.org/gpr-guide
+**(archaeologydataservice.ac.uk) Ground-Penetrating Radar: Best Practices** _(relevance: 0.701)_
+https://archaeologydataservice.ac.uk/gpr-guide
 Practical guide to GPR data collection and interpretation…
 
-<highlights source="[2]">
+<highlights source="(archaeologydataservice.ac.uk)">
 - (0.701) Antenna frequency selection drives the depth/resolution trade-off…
 </highlights>
 
 ---
 ### Sources
 
-- [1] [Remote Sensing in Archaeology](https://example.org/remote-sensing)
-- [2] [Ground-Penetrating Radar: Best Practices](https://example.org/gpr-guide)
+- (jstor.org) [Remote Sensing in Archaeology](https://jstor.org/stable/remote-sensing)
+- (archaeologydataservice.ac.uk) [Ground-Penetrating Radar: Best Practices](https://archaeologydataservice.ac.uk/gpr-guide)
 ```
+
+When multiple results come from the same hostname, the label is disambiguated with a short title slug, e.g. `(en.wikipedia.org — Roman Empire)` vs `(en.wikipedia.org — Byzantine Empire)`. Leading `www.` is stripped, but subdomains are kept distinct (`en.wikipedia.org` ≠ `de.wikipedia.org`).
 
 ## Prerequisites
 
@@ -223,22 +225,25 @@ The tool output already includes a citation instruction, but reinforcing it in y
 
 ```
 When using search results from SearXNG:
-1. Cite each specific fact inline with [[n]](url) — a clickable markdown link
-   whose visible text is "[n]" and whose target is the source URL.
-   Example: "Thebes was founded around 3200 BCE [[1]](https://example.org/thebes)."
+1. Cite each specific fact inline with [(label)](url) — a clickable markdown link
+   whose visible text is "(label)" (the parenthesised identifier shown next to
+   each result, e.g. a domain like "(example.org)" or a domain + short title
+   slug like "(en.wikipedia.org — Roman Empire)") and whose target is the
+   source URL.
+   Example: "Thebes was founded around 3200 BCE [(britannica.com)](https://britannica.com/thebes)."
 2. Take URLs from the Sources section of the tool output.
 3. Only cite sources that are actually relevant to your answer.
 4. When sources contradict each other, mention the disagreement.
 ```
 
-Most markdown renderers (Claude Code, OpenCode, GitHub, anything CommonMark) display `[[n]](url)` as a clickable inline link. This gives the same visual effect as the chat citation chips in claude.ai without needing UI support.
+Most markdown renderers (Claude Code, OpenCode, GitHub, anything CommonMark) display `[(label)](url)` as a clickable inline link with the parenthesised label as visible text. This gives the same visual effect as the chat citation chips in claude.ai without needing UI support — and the label itself already tells the reader where the citation points, even before clicking.
 
 ## How it works
 
 1. Your AI agent calls `cited_search` (or one of the specialized tools) with a query
 2. The MCP server queries your local SearXNG instance via its JSON API
-3. Results are formatted into a numbered, structured block with a ready-made Sources section
-4. The model uses `[n]` markers in its response and copies relevant links into a Sources footer
+3. Results are formatted into a structured block with source-derived `(label)` markers and a ready-made Sources section
+4. The model uses `(label)` markers in its response and copies relevant links into a Sources footer
 
 The citation instruction is embedded in the tool output, so even models without specific citation training tend to follow the pattern.
 

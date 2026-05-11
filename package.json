@@ -1,7 +1,7 @@
 {
   "name": "searxng-cited-mcp",
-  "version": "1.1.0",
-  "description": "MCP server for SearXNG with structured, numbered citations — designed for AI coding agents",
+  "version": "1.2.0",
+  "description": "MCP server for SearXNG with structured, source-labelled citations — designed for AI coding agents",
   "type": "module",
   "main": "index.js",
   "bin": {

@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-05-11
+
+### Changed
+
+- **Citation labels are now source-derived instead of plain numbers.** The
+  former `[1]`, `[2]`, … markers have been replaced with `(hostname)` labels
+  in round brackets, e.g. `(example.com)`. When several results share the
+  same hostname, a short title slug is appended to disambiguate, e.g.
+  `(en.wikipedia.org — Roman Empire)`. The new format is consistent across
+  the result header, the `<highlights source="…">` block, the `### Sources`
+  list, and the inline-citation instruction the LLM sees.
+- Hostname normalisation: leading `www.` is stripped, but subdomains are
+  kept distinct (`en.wikipedia.org` ≠ `de.wikipedia.org`).
+- LLM citation instruction now asks for `[(label)](url)` markdown links
+  (round brackets around the visible label, square brackets as the
+  markdown-link wrapper) rather than `[[n]](url)`.
+
+### Added
+
+- `buildCitationLabels(results)` and `sanitizeSlug(title)` exports in
+  `index.js` for reuse and testing. Slug sanitisation removes
+  markdown-breaking characters (`[`, `]`, `(`, `)`, backticks, pipes,
+  newlines) and caps length at 40 characters with word-boundary truncation
+  and a trailing ellipsis.
+- 14 new tests covering hostname normalisation, subdomain handling, slug
+  disambiguation, collision suffixes (`#2`, `#3`), path-segment fallback
+  for empty titles, and malformed/missing URLs.
+
 ## [1.1.0] - 2026-05-08
 
 ### Added

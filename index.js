@@ -18,9 +18,11 @@ for (const m of ["log", "info", "warn", "error", "debug"]) {
  * SearXNG Cited MCP Server
  *
  * An MCP server that queries a local (or remote) SearXNG instance and returns
- * search results with numbered, structured citations. Designed for AI coding
- * agents (OpenCode, Claude Code, etc.) so the LLM can reference sources with
- * [n] markers and produce a "Sources:" section at the end of its response.
+ * search results with source-labelled, structured citations. Designed for AI
+ * coding agents (OpenCode, Claude Code, etc.) so the LLM can reference sources
+ * with (label) markers — domain-derived identifiers like `(example.com)` or
+ * `(en.wikipedia.org — Roman Empire)` — and produce a "Sources:" section at
+ * the end of its response.
  *
  * Environment variables:
  *   SEARXNG_URL          – Base URL of SearXNG instance, or comma-separated list
@@ -58,6 +60,65 @@ const DEFAULT_LANG = process.env.SEARXNG_DEFAULT_LANG || "en";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Build human-readable citation labels for a result list.
+ *
+ * Rules:
+ *   - Base label is the URL hostname (lowercased, leading `www.` stripped;
+ *     subdomains are kept so `en.wikipedia.org` ≠ `de.wikipedia.org`).
+ *   - If the hostname appears only once → label is just the hostname.
+ *   - If it appears multiple times → label is `hostname — slug`, where slug
+ *     is a sanitised, length-capped variant of the title (or the first path
+ *     segment as fallback).
+ *   - Collisions within the same hostname get a `#2`, `#3`, … suffix.
+ *   - Labels never contain `[` `]` `(` `)` so they remain safe inside both
+ *     standalone `(label)` markers and `[(label)](url)` Markdown links.
+ *
+ * Returns an array of label strings aligned with `results`.
+ */
+export function buildCitationLabels(results) {
+  const hostnames = results.map((r) => {
+    try {
+      return new URL(r.url).hostname.toLowerCase().replace(/^www\./, "");
+    } catch {
+      return "unknown";
+    }
+  });
+  const hostCounts = new Map();
+  for (const h of hostnames) hostCounts.set(h, (hostCounts.get(h) || 0) + 1);
+
+  const seen = new Map();
+  return results.map((r, i) => {
+    const host = hostnames[i];
+    if (hostCounts.get(host) === 1) return host;
+    const slug = sanitizeSlug(r.title) || firstPathSegment(r.url) || "";
+    const base = slug ? `${host} — ${slug}` : host;
+    const n = (seen.get(base) || 0) + 1;
+    seen.set(base, n);
+    return n === 1 ? base : `${base} #${n}`;
+  });
+}
+
+export function sanitizeSlug(title) {
+  if (!title) return "";
+  let s = String(title).replace(/[\[\]()`|\n\r]/g, "").replace(/\s+/g, " ").trim();
+  if (s.length > 40) {
+    const cut = s.slice(0, 40);
+    const lastSpace = cut.lastIndexOf(" ");
+    s = (lastSpace > 20 ? cut.slice(0, lastSpace) : cut) + "…";
+  }
+  return s;
+}
+
+function firstPathSegment(url) {
+  try {
+    const seg = new URL(url).pathname.split("/").filter(Boolean)[0];
+    return seg ? sanitizeSlug(decodeURIComponent(seg)) : "";
+  } catch {
+    return "";
+  }
+}
 
 function buildHeaders() {
   const headers = { Accept: "application/json" };
@@ -120,30 +181,34 @@ async function querySearXNG({
 }
 
 /**
- * Format results into a numbered, cited text block that the LLM can
- * reference directly.
+ * Format results into a cited text block that the LLM can reference directly.
+ *
+ * Citation labels are derived from the source URL hostname (with a short
+ * title slug appended when multiple results share the same hostname), e.g.
+ * `(example.com)` or `(en.wikipedia.org — Roman Empire)`.
  *
  * Output structure:
  *   ## Search results for: "query"
  *
- *   **[1] Title** (date) [engines]
+ *   **(example.com) Title** (date) [engines]
  *   URL
  *   Snippet…
  *   > Full content (if fetched)
  *
  *   ---
  *   ### Sources
- *   - [1] [Title](URL)
+ *   - (example.com) [Title](URL)
  */
 export function formatCitedResults(results, query) {
   if (!results || results.length === 0) {
     return `No results found for "${query}".`;
   }
 
+  const labels = buildCitationLabels(results);
   const lines = [`## Search results for: "${query}"\n`];
 
   results.forEach((r, i) => {
-    const n = i + 1;
+    const label = labels[i];
     const title = r.title || "(no title)";
     const url = r.url || "";
     const snippet = r.content || r.snippet || "";
@@ -154,13 +219,13 @@ export function formatCitedResults(results, query) {
       typeof r.bestScore === "number"
         ? ` _(relevance: ${r.bestScore.toFixed(3)})_`
         : "";
-    lines.push(`**[${n}] ${title}**${publishedDate}${engine}${scoreTag}`);
+    lines.push(`**(${label}) ${title}**${publishedDate}${engine}${scoreTag}`);
     lines.push(`${url}`);
     if (snippet) lines.push(`${snippet}`);
 
     if (r.highlights && r.highlights.length) {
       lines.push("");
-      lines.push(`<highlights source="[${n}]">`);
+      lines.push(`<highlights source="(${label})">`);
       r.highlights.forEach((h, k) => {
         lines.push(`- (${h.score.toFixed(3)}) ${h.text}`);
         if (k < r.highlights.length - 1) lines.push("");
@@ -169,7 +234,7 @@ export function formatCitedResults(results, query) {
     } else if (r.fullContent) {
       // Highlights step skipped (embedder unavailable) — fall back to full content.
       lines.push("");
-      lines.push(`<content source="[${n}]">`);
+      lines.push(`<content source="(${label})">`);
       lines.push(r.fullContent);
       lines.push(`</content>`);
     } else if (r.fetchError) {
@@ -183,17 +248,19 @@ export function formatCitedResults(results, query) {
   lines.push("### Sources");
   lines.push("");
   results.forEach((r, i) => {
-    const n = i + 1;
+    const label = labels[i];
     const title = r.title || "(no title)";
     const url = r.url || "";
-    lines.push(`- [${n}] [${title}](${url})`);
+    lines.push(`- (${label}) [${title}](${url})`);
   });
 
   lines.push("");
   lines.push(
-    "_Cite each specific fact inline as a clickable markdown link: `[[n]](url)` — " +
-      'e.g. "The Late Bronze Age collapse began around 1200 BCE ' +
-      "[[1]](https://example.org/lba).\" Take the URL from the matching " +
+    "_Cite each specific fact inline as a clickable markdown link: `[(label)](url)` — " +
+      "where `label` is the parenthesised identifier shown next to each result above " +
+      "(domain name, sometimes with a short title slug). " +
+      'E.g. "The Late Bronze Age collapse began around 1200 BCE ' +
+      "[(example.org)](https://example.org/lba).\" Take the URL from the matching " +
       "Sources entry above. Answer naturally; only cite when quoting a specific claim._"
   );
 
@@ -493,8 +560,8 @@ server.tool(
   "cited_search",
   `Web search via a local SearXNG instance. Top results are fetched, extracted with
 Readability, and semantically reranked against the query — returning the most relevant
-passages ("highlights") rather than full pages. Cite sources with [n] when quoting
-specific facts; for the response itself, prioritise the user's question and context.`,
+passages ("highlights") rather than full pages. Cite sources with (label) markers
+when quoting specific facts; for the response itself, prioritise the user's question and context.`,
   {
     query: z.string().describe("Search query"),
     categories: z
@@ -608,8 +675,8 @@ specific facts; for the response itself, prioritise the user's question and cont
 
 server.tool(
   "cited_news_search",
-  `Search recent news via SearXNG. Results include publication dates, numbered citations,
-and (by default) extracted article text for the top results.`,
+  `Search recent news via SearXNG. Results include publication dates, (label)-style
+citations, and (by default) extracted article text for the top results.`,
   {
     query: z.string().describe("News search query"),
     engines: z
@@ -701,7 +768,7 @@ and (by default) extracted article text for the top results.`,
 server.tool(
   "cited_science_search",
   `Search academic sources (Google Scholar, Semantic Scholar, arXiv, etc.) via SearXNG.
-Ideal for literature review. Results include numbered citations and (by default)
+Ideal for literature review. Results include (label)-style citations and (by default)
 extracted abstract/landing-page text for the top results. Note: PDF URLs and
 paywalled journal pages may fail to extract — the snippet remains available.`,
   {
