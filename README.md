@@ -81,6 +81,8 @@ git clone https://github.com/leiverkus/searxng-cited-mcp.git
 cd searxng-cited-mcp
 cp .env.example .env
 echo "SEARXNG_SECRET_KEY=$(openssl rand -hex 32)" >> .env
+cp searxng-config/settings.yml.example searxng-config/settings.yml
+sed -i.bak "s/REPLACE_WITH_RANDOM_HEX_STRING/$(openssl rand -hex 32)/" searxng-config/settings.yml && rm searxng-config/settings.yml.bak
 docker compose up -d
 ```
 
@@ -89,7 +91,7 @@ After startup:
 - SearXNG UI: <http://localhost:8888>
 - MCP server (HTTP transport): <http://127.0.0.1:3333/mcp>
 
-The pre-configured engines in `searxng-config/settings.yml` cover Google, Bing, DuckDuckGo, Brave, Wikipedia, Semantic Scholar, arXiv, PubMed, and Google Scholar.
+The pre-configured engines in `searxng-config/settings.yml.example` cover Google, Bing, DuckDuckGo, Brave, Wikipedia, Semantic Scholar, arXiv, PubMed, and Google Scholar. Two engines (CORE, Springer Nature) need a free API key — see the placeholders in the example file. The runtime `settings.yml` is gitignored so your secret_key and API keys never end up in a commit.
 
 ### Connecting clients
 

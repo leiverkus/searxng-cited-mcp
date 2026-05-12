@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-05-12
+
+### Changed
+
+- `searxng-config/settings.yml` is now **gitignored** and bootstrapped from a
+  committed `searxng-config/settings.yml.example`. The runtime file holds the
+  Granian `secret_key` and optional engine API keys (CORE, Springer Nature)
+  and must not be committed. Existing checkouts: copy the example over,
+  generate a secret with `openssl rand -hex 32`, then fill in any API keys.
+- Documented in the README's Docker-stack quickstart that the `ultrasecretkey`
+  placeholder is **only** substituted by the official `searxng/searxng` image
+  when it creates `settings.yml` itself (entrypoint `else` branch). For a
+  volume-mounted file the substitution never runs — the example uses an
+  explicit `REPLACE_WITH_RANDOM_HEX_STRING` placeholder instead and the
+  quickstart fills it in via `sed`.
+
 ## [1.2.0] - 2026-05-11
 
 ### Changed

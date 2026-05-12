@@ -1,0 +1,224 @@
+# =============================================================================
+# SearXNG configuration for use with searxng-cited-mcp — EXAMPLE
+#
+# Copy this file to settings.yml and adjust:
+#   cp searxng-config/settings.yml.example searxng-config/settings.yml
+#
+# Then fill in:
+#   - server.secret_key           (random string; NOT "ultrasecretkey")
+#   - engines.core.api_key        (https://core.ac.uk/services/api)
+#   - engines.springer.api_key    (https://dev.springernature.com/)
+#   - engines.openalex.mailto     (your contact email for the polite pool)
+#
+# Reference: https://docs.searxng.org/admin/settings/settings.html
+#
+# Profile (Patrick Leiverkus / DAO):
+#  - MCP-fokussiert (kein UI-Tab-Overhead)
+#  - weight-basiertes Ranking (Wikipedia/Wikidata/Crossref hoch, Google niedrig)
+#  - akademischer Stack: OpenAlex + Crossref + Semantic Scholar + arXiv +
+#    PubMed + Google Scholar + (CORE, Springer optional via API-Key)
+#  - LoC + Wikidata + OSM für levantinische Archäologie / Linked Data
+# =============================================================================
+
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "searxng-cited-mcp"
+
+brand: {}
+
+doi_resolvers:
+  oadoi.org: 'https://oadoi.org/'
+  doi.org: 'https://doi.org/'
+
+default_doi_resolver: 'oadoi.org'
+
+server:
+  # WICHTIG: Das searxng/searxng-Image substituiert "ultrasecretkey" NUR
+  # beim allerersten Erstellen der Datei (entrypoint.sh, else-Zweig).
+  # Bei einer existierenden, gemounteten settings.yml passiert nichts.
+  # Hier einen zufälligen String eintragen, z.B.:
+  #   openssl rand -hex 32
+  secret_key: "REPLACE_WITH_RANDOM_HEX_STRING"
+  bind_address: "0.0.0.0"
+  port: 8080
+  base_url: http://localhost:8888
+  image_proxy: false
+  http_protocol_version: "1.1"
+
+ui:
+  static_use_hash: true
+  default_locale: "en"
+  query_in_title: false
+  infinite_scroll: false
+  center_alignment: false
+  theme_args:
+    simple_style: auto
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "auto"
+  # JSON muss explizit aktiviert sein — searxng-cited-mcp konsumiert JSON.
+  formats:
+    - html
+    - json
+
+# =============================================================================
+# ENGINES
+#
+# weight-Konvention:
+#   2.0  — Top-Faktenquellen (Wikipedia)
+#   1.8  — kanonische DOI/Linked-Data-Quellen (Crossref, Wikidata)
+#   1.5  — primäre akademische APIs (OpenAlex, Semantic Scholar, arXiv,
+#          PubMed, Google Scholar)
+#   1.3  — sekundäre akademische Quellen (CORE, Springer, LoC)
+#   1.0  — allgemeine Websuche (Brave, DuckDuckGo, Bing, Google)
+# =============================================================================
+engines:
+
+  # ---------------------------------------------------------------------------
+  # ALLGEMEINE WEBSUCHE
+  # ---------------------------------------------------------------------------
+
+  - name: google
+    engine: google
+    shortcut: g
+    timeout: 5.0
+    weight: 1.0
+    # Hinweis: Self-hosted Google läuft regelmäßig in 429/CAPTCHA.
+    # Brave + DDG + Bing tragen das Backbone, Google ist Bonus.
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    timeout: 5.0
+    weight: 1.5
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    timeout: 5.0
+    weight: 1.0
+
+  - name: bing
+    engine: bing
+    shortcut: b
+    timeout: 5.0
+    weight: 1.0
+
+  # ---------------------------------------------------------------------------
+  # FAKTENBASIS / LINKED DATA
+  # ---------------------------------------------------------------------------
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    timeout: 3.0
+    weight: 2.0
+
+  - name: wikidata
+    engine: wikidata
+    shortcut: wd
+    categories: [general]
+    timeout: 4.0
+    weight: 1.8
+    display_type: ["infobox"]
+
+  # ---------------------------------------------------------------------------
+  # AKADEMISCHE QUELLEN — cited_science_search Kern
+  # ---------------------------------------------------------------------------
+
+  - name: openalex
+    engine: openalex
+    shortcut: oa
+    categories: [science, scientific publications]
+    timeout: 5.0
+    weight: 1.5
+    # OpenAlex Polite Pool: bevorzugte Rate-Limits mit Kontakt-Mail
+    mailto: "your-email@example.org"
+
+  - name: crossref
+    engine: crossref
+    shortcut: cr
+    categories: [science]
+    timeout: 5.0
+    weight: 1.8
+    # Kanonische DOI-Quelle. Höchstes akademisches Gewicht.
+
+  - name: semantic scholar
+    engine: semantic_scholar
+    shortcut: ss
+    timeout: 5.0
+    weight: 1.5
+
+  - name: arxiv
+    engine: arxiv
+    shortcut: arx
+    timeout: 5.0
+    weight: 1.5
+
+  - name: pubmed
+    engine: pubmed
+    shortcut: pm
+    timeout: 5.0
+    weight: 1.5
+
+  - name: google scholar
+    engine: google_scholar
+    shortcut: gs
+    timeout: 5.0
+    weight: 1.5
+
+  - name: core.ac.uk
+    engine: core
+    shortcut: cor
+    categories: [science]
+    timeout: 5.0
+    weight: 1.3
+    # CORE ist der größte OA-Volltext-Index.
+    # API-Key kostenlos: https://core.ac.uk/services/api
+    api_key: "YOUR_CORE_API_KEY"
+    inactive: false
+    disabled: false
+
+  - name: springer nature
+    engine: springer
+    shortcut: spr
+    categories: [science]
+    timeout: 8.0
+    weight: 1.4
+    # API-Key kostenlos: https://dev.springernature.com/
+    api_key: "YOUR_SPRINGER_API_KEY"
+    inactive: false
+    disabled: false
+
+  - name: library of congress
+    engine: loc
+    shortcut: loc
+    categories: [science, images]
+    timeout: 5.0
+    weight: 1.3
+    # Relevant für Near Eastern Studies, historische Karten, Bestände.
+
+  # ---------------------------------------------------------------------------
+  # GEO / MAP
+  # ---------------------------------------------------------------------------
+
+  - name: openstreetmap
+    engine: openstreetmap
+    shortcut: osm
+    categories: [map]
+    timeout: 5.0
+
+# =============================================================================
+# OUTGOING — Netzwerk
+# =============================================================================
+outgoing:
+  request_timeout: 6.0
+  max_request_timeout: 15.0
+  useragent_suffix: ""
+  pool_connections: 100
+  pool_maxsize: 20
+  enable_http2: true
