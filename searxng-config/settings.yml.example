@@ -126,6 +126,16 @@ engines:
     weight: 1.8
     display_type: ["infobox"]
 
+  - name: wolfram alpha
+    engine: wolframalpha_noapi
+    shortcut: wolf
+    categories: [general, science]
+    timeout: 6.0
+    weight: 1.5
+    disabled: false
+    # HTML-Scraper-Variante, keine App-ID nötig. Liefert kuratierte
+    # Antworten für Rechen-/Faktenfragen (Integrale, Konstanten, Daten).
+
   # ---------------------------------------------------------------------------
   # AKADEMISCHE QUELLEN — cited_science_search Kern
   # ---------------------------------------------------------------------------

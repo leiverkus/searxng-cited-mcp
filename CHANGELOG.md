@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.2] - 2026-05-13
+
+### Added
+
+- Wolfram Alpha engine enabled in `searxng-config/settings.yml.example`
+  (`engine: wolframalpha_noapi`, shortcut `wolf`, categories
+  `[general, science]`, weight `1.5`). No API key required — uses the
+  HTML-scraper variant. Useful for computational/factual queries
+  (integrals, physical constants, unit conversions) returned as infobox
+  hits alongside the regular result list. Shortcut is `wolf` rather than
+  the canonical `wa` because `wa` is already claimed by another default
+  engine and SearXNG rejects ambiguous shortcuts at startup.
+
 ## [1.2.1] - 2026-05-12
 
 ### Changed
