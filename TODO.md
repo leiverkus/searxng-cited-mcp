@@ -36,13 +36,12 @@ in [CHANGELOG.md](CHANGELOG.md).
 
 ## Repo hygiene
 
-- [ ] **`package-lock.json` is currently gitignored.** Fine for `npm publish`
+- [x] **`package-lock.json` is currently gitignored.** Fine for `npm publish`
       (lockfiles aren't shipped anyway), but it bites two flows: a fresh
       `git clone` + `docker compose build` runs `npm ci` against a missing
-      lockfile and fails; and CI (`npm ci`) has the same problem. Two
-      options: (a) commit the lockfile and remove the gitignore entry, or
-      (b) switch the Dockerfile/CI to `npm install` (slower, version drift
-      possible). Decision still open.
+      lockfile and fails; and CI (`npm ci`) has the same problem. — Settled
+      by committing the lockfile and removing the gitignore entry, so the
+      Dockerfile can keep using `npm ci` for deterministic builds.
 - [ ] Always tag releases and cut a GitHub Release after each `vX.Y.Z`
       commit — currently we have v1.4.1 on `main` but no git tag and no
       Release entry. Tag retroactively for 1.3.0, 1.4.0, 1.4.1 once the
