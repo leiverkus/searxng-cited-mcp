@@ -17,14 +17,36 @@ in [CHANGELOG.md](CHANGELOG.md).
 ## Adoption
 
 - [ ] Publish to npm registry — `npx searxng-cited-mcp` should just work
-      (the `bin` field in `package.json` is already correct)
-- [ ] Publish a Docker image to GHCR / Docker Hub so the Compose stack
-      doesn't need a local build
+      (the `bin` field in `package.json` is already correct). Steps:
+      `npm login` → `npm publish --dry-run` (verify file list) →
+      `npm publish --access public` → `git tag vX.Y.Z` → `git push --tags`
+      → cut a GitHub Release from the tag using the matching CHANGELOG
+      section as the body.
+- [ ] Publish a Docker image to GHCR (`ghcr.io/leiverkus/searxng-cited-mcp`)
+      so the Compose stack doesn't need a local build. Two parts: GitHub
+      Actions workflow that builds on `v*` tags + pushes `:X.Y.Z` and
+      `:latest`; and `docker-compose.yml` switched to `image: ghcr.io/…`
+      with `build: .` as a fallback for local development.
 - [ ] Submit to [awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers)
       and [PulseMCP](https://pulsemcp.com)
 - [ ] Create a `smithery.yaml` manifest for [Smithery](https://smithery.ai)
-- [ ] GitHub Actions CI: run `npm test` on push + PR; build the Docker image
-      on tags
+- [ ] GitHub Actions CI: run `npm test` on push + PR (Node 20 + 22 matrix,
+      ubuntu-latest, no external deps so a single runner is enough). Add
+      a status badge to the README header.
+
+## Repo hygiene
+
+- [ ] **`package-lock.json` is currently gitignored.** Fine for `npm publish`
+      (lockfiles aren't shipped anyway), but it bites two flows: a fresh
+      `git clone` + `docker compose build` runs `npm ci` against a missing
+      lockfile and fails; and CI (`npm ci`) has the same problem. Two
+      options: (a) commit the lockfile and remove the gitignore entry, or
+      (b) switch the Dockerfile/CI to `npm install` (slower, version drift
+      possible). Decision still open.
+- [ ] Always tag releases and cut a GitHub Release after each `vX.Y.Z`
+      commit — currently we have v1.4.1 on `main` but no git tag and no
+      Release entry. Tag retroactively for 1.3.0, 1.4.0, 1.4.1 once the
+      lockfile question is settled.
 
 ## Robustness
 
