@@ -42,10 +42,12 @@ in [CHANGELOG.md](CHANGELOG.md).
       lockfile and fails; and CI (`npm ci`) has the same problem. — Settled
       by committing the lockfile and removing the gitignore entry, so the
       Dockerfile can keep using `npm ci` for deterministic builds.
-- [ ] Always tag releases and cut a GitHub Release after each `vX.Y.Z`
-      commit — currently we have v1.4.1 on `main` but no git tag and no
-      Release entry. Tag retroactively for 1.3.0, 1.4.0, 1.4.1 once the
-      lockfile question is settled.
+- [x] Always tag releases and cut a GitHub Release after each `vX.Y.Z`
+      commit. — Settled by tagging v1.4.0 and v1.4.1 retroactively (1.3.0
+      had no standalone commit so it lives only as a CHANGELOG section)
+      and creating matching GitHub Releases with the CHANGELOG bodies.
+      Future releases: tag annotated, push the tag, then
+      `gh release create vX.Y.Z --title … --latest --notes-file <(awk …)`.
 
 ## Robustness
 
