@@ -1,7 +1,18 @@
 # Roadmap
 
-Open items for future releases. Items shipped in v1.1.0 are listed in
-[CHANGELOG.md](CHANGELOG.md).
+Open items for future releases. Items shipped in v1.1.0–v1.4.0 are listed
+in [CHANGELOG.md](CHANGELOG.md).
+
+## Detection-layer follow-ups (post-1.4.0)
+
+- [ ] Hot-reload `domain-classes.yml` when the file mtime changes, so
+      tuning the list in production doesn't require restarting the server
+- [ ] Optional `oa_status` enrichment: if `doi_detected` is set and the
+      consumer opts in, surface a Unpaywall hint inline. Today the briefing
+      keeps this strictly in paper-search-mcp's domain — reconsider only if
+      cross-tool routing becomes too noisy in practice.
+- [ ] Track per-class hit rates over real queries so the YAML can be
+      pruned/extended with evidence
 
 ## Adoption
 
@@ -17,8 +28,11 @@ Open items for future releases. Items shipped in v1.1.0 are listed in
 
 ## Robustness
 
-- [ ] `SEARXNG_TIMEOUT` env var (currently 15s hardcoded for `fetch_url`
-      and SearXNG queries)
+- [x] `SEARXNG_TIMEOUT` env var (currently 15s hardcoded for `fetch_url`
+      and SearXNG queries) — shipped in 1.3.0 as `SEARXNG_TIMEOUT_MS`,
+      plus the new `FETCH_URL_TIMEOUT_MS` (bulk fetch timeout) and
+      `TOOL_BUDGET_MS` (overall tool-call deadline with partial-result
+      return on overrun).
 - [ ] Retry with backoff for transient SearXNG failures (503, timeouts) —
       complementary to the multi-instance failover already in place
 - [ ] Sanitize query strings (strip control characters, enforce a sensible

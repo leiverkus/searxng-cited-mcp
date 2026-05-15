@@ -218,3 +218,47 @@ test("sanitizeSlug — empty or nullish input returns empty string", () => {
   assert.equal(sanitizeSlug(undefined), "");
   assert.equal(sanitizeSlug(null), "");
 });
+
+// -- maxChars truncation -------------------------------------------------
+
+test("formatCitedResults — drops tail blocks when total exceeds maxChars but keeps Sources", () => {
+  // Five results, each with a long fullContent that would push the output over the cap.
+  const big = "X".repeat(2000);
+  const results = Array.from({ length: 5 }, (_, i) => ({
+    title: `Doc ${i + 1}`,
+    url: `https://example${i + 1}.com/page`,
+    content: "snippet",
+    fullContent: big,
+  }));
+
+  const out = formatCitedResults(results, "stress test", { maxChars: 4000 });
+
+  assert.ok(
+    out.length <= 4000 + 600, // generous overhead allowance for truncation notice
+    `output should respect maxChars budget, got ${out.length}`
+  );
+  assert.match(out, /output truncated/);
+  // Sources block must be present in full — citations are non-negotiable.
+  assert.match(out, /### Sources/);
+  for (let i = 1; i <= 5; i++) {
+    assert.match(
+      out,
+      new RegExp(`\\(example${i}\\.com\\) \\[Doc ${i}\\]`),
+      `source entry for Doc ${i} must survive truncation`
+    );
+  }
+  // Citation instruction must still be present so the LLM knows how to cite.
+  assert.match(out, /\[\(label\)\]\(url\)/);
+});
+
+test("formatCitedResults — maxChars 0 / unset disables the cap (passthrough)", () => {
+  const big = "Y".repeat(50000);
+  const out = formatCitedResults(
+    [{ title: "Doc", url: "https://example.org", fullContent: big }],
+    "q",
+    { maxChars: 0 }
+  );
+  // No truncation marker, full content survives.
+  assert.doesNotMatch(out, /output truncated/);
+  assert.ok(out.length > 50000, "full content must round-trip when cap disabled");
+});

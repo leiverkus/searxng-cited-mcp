@@ -14,16 +14,23 @@ Most search MCP servers return raw results and leave citation formatting to the 
 - Appending a ready-made **Sources block** with markdown links
 - Including an **instruction line** that tells the model how to cite
 - **Semantically reranking** the top hits with a small local embedding model so the highest-scoring passages float to the top (Exa-style highlights)
+- A **detection layer** that tags each result with `source_class`, `doi_detected`, `oa_url_heuristic`, and `content_type` — so the LLM can route to `paper-search-mcp` for Crossref/Unpaywall verification when there's a DOI, and avoid citing aggregators (`academia.edu`, `researchgate.net`) or pseudoscientific sources as primary references
 - Running entirely **locally** — no API keys, no costs, no data leaving your machine
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
-| `cited_search` | General web search with category, language, time filter, and optional `engines` override |
-| `cited_news_search` | News search (defaults to past week), with optional `engines` |
-| `cited_science_search` | Academic sources (arXiv, Semantic Scholar, PubMed, Google Scholar, …) with optional `engines` |
+| `web_search` | General web search with category, language, time filter, and optional `engines` override |
+| `news_search` | News search (defaults to past week), with optional `engines` |
+| `science_search` | Academic sources (arXiv, Semantic Scholar, PubMed, Google Scholar, …) with optional `engines` |
 | `fetch_url` | Fetch a URL and return it as readable plain text |
+
+> **Renamed in 1.3.0.** The old names `cited_search`, `cited_news_search`, and
+> `cited_science_search` remain registered as deprecated aliases pointing at
+> the same handlers, so existing integrations keep working. Set
+> `EXPOSE_LEGACY_TOOL_NAMES=false` to hide them, or just switch to the new
+> names. Aliases will be removed in 2.0.0.
 
 All search tools accept an optional **`engines`** parameter — a comma-separated list of SearXNG engine names (e.g. `"semantic_scholar,arxiv"` or `"google,bing"`) — to scope a single query without changing global config.
 
@@ -36,33 +43,59 @@ The model is loaded lazily and pre-warmed on startup. With Docker the cache is p
 ### Output format
 
 ```
-## Search results for: "archaeological survey methods"
+## Search results for: "Cohen Negev fortresses"
 
-**(jstor.org) Remote Sensing in Archaeology** (2024-11-20) [google scholar] _(relevance: 0.812)_
-https://jstor.org/stable/remote-sensing
-A comprehensive review of satellite and drone-based survey methods…
+**(cambridge.org) The Iron Age Fortresses of the Negev** (2024-11-20) [google scholar] _(relevance: 0.812)_
+_✓ Primary publisher_
+DOI: 10.1179/abc.2009.0024
+https://www.cambridge.org/core/journals/levant/article/123
+Re-examination of the Cohen 1979 excavation reports from the central Negev fortresses…
 
-<highlights source="(jstor.org)">
-- (0.812) Recent UAV-based photogrammetry workflows reduce the cost of high-resolution
-  topographic mapping by an order of magnitude compared to traditional total-station survey.
-- (0.764) Combining LiDAR with multispectral imagery exposes sub-surface features invisible
-  to ground-level inspection, particularly in densely vegetated regions.
+<highlights source="(cambridge.org)">
+- (0.812) The author argues for a 10th-century BCE attribution based on revised ceramic typology…
 </highlights>
 
-**(archaeologydataservice.ac.uk) Ground-Penetrating Radar: Best Practices** _(relevance: 0.701)_
-https://archaeologydataservice.ac.uk/gpr-guide
-Practical guide to GPR data collection and interpretation…
+**(academia.edu) Cohen 1979 — Negev Fortresses (mirror)** _(relevance: 0.701)_
+_⚠️ AGGREGATOR — not a primary source; look up the publisher DOI_
+https://academia.edu/papers/123456
+Full-text mirror of the original 1979 monograph chapter…
 
-<highlights source="(archaeologydataservice.ac.uk)">
-- (0.701) Antenna frequency selection drives the depth/resolution trade-off…
-</highlights>
+**(bible.ca) Negev Fortresses and the Exodus**
+_⚠️⚠️ SUSPECT — apologetic / pseudoscientific source; do not cite_
+https://bible.ca/exodus-negev
+Claims the fortresses prove the biblical Exodus…
 
 ---
 ### Sources
 
-- (jstor.org) [Remote Sensing in Archaeology](https://jstor.org/stable/remote-sensing)
-- (archaeologydataservice.ac.uk) [Ground-Penetrating Radar: Best Practices](https://archaeologydataservice.ac.uk/gpr-guide)
+- (cambridge.org) [The Iron Age Fortresses of the Negev](https://www.cambridge.org/core/journals/levant/article/123)
+- (academia.edu) [Cohen 1979 — Negev Fortresses (mirror)](https://academia.edu/papers/123456) ⚠️ aggregator
+- (bible.ca) [Negev Fortresses and the Exodus](https://bible.ca/exodus-negev) ⚠️⚠️ suspect
 ```
+
+### Detection layer
+
+Every search result is annotated with structured signals that the LLM can route on — without the server itself making any external API calls beyond SearXNG and the result URLs:
+
+| Field | Values | Set by |
+|---|---|---|
+| `source_class` | `primary_publisher`, `academic_repository`, `preprint_server`, `aggregator`, `suspect`, `grey_lit_or_unknown` | Glob match of result hostname against [`domain-classes.yml`](domain-classes.yml) |
+| `doi_detected` | `"10.xxx/yyy"` or absent | Regex over title + snippet + extracted full text (no Crossref call) |
+| `doi_candidates` | array of strings (only if >1 DOI found) | same |
+| `oa_url_heuristic` | `"likely"`, `"maybe"`, `"no"` | URL shape — `.pdf` / `/pdf/` / repo host etc. (no Unpaywall call) |
+| `content_type` | e.g. `"application/pdf"`, `"text/html"` | HTTP response header |
+| `content_extraction` | `"ok"`, `"failed_pdf"`, `"fetch_failed"` | Result of Readability / pdf-parse |
+
+Results are reordered by class (primary > repository > unknown > aggregator > suspect) so the fetch budget hits the best sources first. Disable with `prioritize_primary: false`.
+
+When `doi_detected` is set on a result, the consuming LLM should call `paper-search-mcp` (or equivalent) with that DOI to verify metadata against Crossref, rather than trusting snippet text. This division of labor keeps this server independent of `paper-search-mcp`, so the two tools cross-validate each other.
+
+The domain lists in `domain-classes.yml` are right-anchor globs:
+- `*.cambridge.org` matches `journals.cambridge.org`, `www.cambridge.org`, and `cambridge.org` itself
+- `*.cambridge.org` does NOT match `cambridge.org.evil-aggregator.com`
+- `*.ub.uni-*.de` matches `www.ub.uni-oldenburg.de`
+
+Edit the file to extend; the loader reads it on every tool call (cached in memory).
 
 When multiple results come from the same hostname, the label is disambiguated with a short title slug, e.g. `(en.wikipedia.org — Roman Empire)` vs `(en.wikipedia.org — Byzantine Empire)`. Leading `www.` is stripped, but subdomains are kept distinct (`en.wikipedia.org` ≠ `de.wikipedia.org`).
 
@@ -220,6 +253,11 @@ Add to your Claude Code MCP settings:
 | `MCP_TRANSPORT` | `stdio` | `stdio` or `http`. Use `http` for remote access via Streamable HTTP transport. |
 | `MCP_HOST` | `127.0.0.1` | Bind host when `MCP_TRANSPORT=http` |
 | `MCP_PORT` | `3333` | Bind port when `MCP_TRANSPORT=http` |
+| `SEARXNG_TIMEOUT_MS` | `15000` | Timeout for the SearXNG query itself, in milliseconds. |
+| `FETCH_URL_TIMEOUT_MS` | `8000` | Per-URL fetch timeout during bulk content enrichment. The standalone `fetch_url` tool keeps its own 15s timeout since you've explicitly chosen that URL. |
+| `TOOL_BUDGET_MS` | `25000` | Hard wall-clock budget for a single search tool call. On overrun, in-flight URL fetches are aborted and surface as `fetchError: "budget exceeded"`; whichever fetches already completed are returned. Set a few seconds below your MCP client's request timeout. |
+| `MAX_OUTPUT_CHARS` | `20000` | Hard cap on the tool response length. Tail result blocks are dropped first; the `### Sources` list and citation instruction are always preserved. |
+| `EXPOSE_LEGACY_TOOL_NAMES` | `true` | When `false`, suppresses the deprecated `cited_search`, `cited_news_search`, `cited_science_search` aliases. |
 
 ## System prompt recommendation
 
@@ -242,7 +280,7 @@ Most markdown renderers (Claude Code, OpenCode, GitHub, anything CommonMark) dis
 
 ## How it works
 
-1. Your AI agent calls `cited_search` (or one of the specialized tools) with a query
+1. Your AI agent calls `web_search` (or one of the specialized tools) with a query
 2. The MCP server queries your local SearXNG instance via its JSON API
 3. Results are formatted into a structured block with source-derived `(label)` markers and a ready-made Sources section
 4. The model uses `(label)` markers in its response and copies relevant links into a Sources footer

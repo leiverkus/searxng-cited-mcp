@@ -1,0 +1,102 @@
+# Domain classification for SearXNG-Cited-MCP detection layer.
+#
+# Patterns are glob-style hostnames with right-anchored matching:
+#   - "*.cambridge.org"  matches "journals.cambridge.org" and "www.cambridge.org"
+#                        and "cambridge.org" itself (but NOT "cambridge.org.evil.com")
+#   - "academia.edu"     matches only "academia.edu" exactly
+#   - "*.ub.uni-*.de"    matches "www.ub.uni-oldenburg.de" (single label per "*")
+#
+# Class priority on multi-match (highest wins, top to bottom):
+#   suspect > primary_publisher > academic_repository > preprint_server > aggregator
+#
+# Edit freely — re-loaded on every tool call. No code change needed.
+
+classes:
+  primary_publisher:
+    - "*.cambridge.org"
+    - "*.tandfonline.com"
+    - "*.brill.com"
+    - "*.uchicago.edu"
+    - "*.degruyter.com"
+    - "*.oup.com"
+    - "*.springer.com"
+    - "*.springeropen.com"
+    - "*.elsevier.com"
+    - "sciencedirect.com"
+    - "*.sciencedirect.com"
+    - "*.wiley.com"
+    - "onlinelibrary.wiley.com"
+    - "journals.plos.org"
+    - "*.sagepub.com"
+    - "*.nature.com"
+    - "*.jstor.org"
+    - "*.mdpi.com"
+    - "*.cell.com"
+    - "*.bmj.com"
+    - "*.aps.org"
+    - "*.acm.org"
+    - "*.ieee.org"
+
+  academic_repository:
+    - "propylaeum.de"
+    - "*.propylaeum.de"
+    - "zenon.dainst.org"
+    - "publications.iaa.org.il"
+    - "persee.fr"
+    - "*.persee.fr"
+    - "openedition.org"
+    - "*.openedition.org"
+    - "hal.archives-ouvertes.fr"
+    - "*.hal.science"
+    - "hal.science"
+    - "zenodo.org"
+    - "osf.io"
+    - "core.ac.uk"
+    - "*.core.ac.uk"
+    - "pubmed.ncbi.nlm.nih.gov"
+    - "www.ncbi.nlm.nih.gov"
+    - "europepmc.org"
+    - "*.ub.uni-*.de"
+    - "*.bibliothek.uni-*.de"
+    - "*.uni-*.de"
+    - "diglib.uni-*.de"
+    - "kobv.de"
+    - "*.kobv.de"
+
+  preprint_server:
+    - "arxiv.org"
+    - "*.arxiv.org"
+    - "biorxiv.org"
+    - "*.biorxiv.org"
+    - "medrxiv.org"
+    - "*.medrxiv.org"
+    - "ssrn.com"
+    - "*.ssrn.com"
+    - "chemrxiv.org"
+
+  aggregator:
+    - "academia.edu"
+    - "*.academia.edu"
+    - "researchgate.net"
+    - "*.researchgate.net"
+    - "scribd.com"
+    - "*.scribd.com"
+    - "books.google.com"
+    - "scholar.google.com"
+    - "bookfi.org"
+    - "libgen.*"
+    - "z-lib.*"
+    - "*.z-lib.*"
+    - "annas-archive.*"
+    - "*.annas-archive.*"
+
+  suspect:
+    - "bible.ca"
+    - "biblewalks.com"
+    - "answersingenesis.org"
+    - "*.answersingenesis.org"
+    - "creationmag.com"
+    - "evolutionnews.org"
+    - "*.evolutionnews.org"
+    - "icr.org"
+    - "creation.com"

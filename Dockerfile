@@ -9,6 +9,8 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 COPY index.js ./
+COPY lib ./lib
+COPY domain-classes.yml ./
 
 # Cache directory for the @xenova/transformers MiniLM model.
 # Mount a named volume here to avoid re-downloading on container restart.

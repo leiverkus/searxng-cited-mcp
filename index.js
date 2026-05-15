@@ -25,13 +25,24 @@ for (const m of ["log", "info", "warn", "error", "debug"]) {
  * the end of its response.
  *
  * Environment variables:
- *   SEARXNG_URL          – Base URL of SearXNG instance, or comma-separated list
- *                          of URLs to try in order (default: http://localhost:8080)
- *   SEARXNG_API_KEY      – Optional HTTP Basic auth password (username is always "searxng")
- *   SEARXNG_DEFAULT_LANG – Default search language (default: en)
- *   MCP_TRANSPORT        – "stdio" (default) or "http" for remote access via Streamable HTTP
- *   MCP_HOST             – Bind host for http transport (default: 127.0.0.1)
- *   MCP_PORT             – Bind port for http transport (default: 3333)
+ *   SEARXNG_URL              – Base URL of SearXNG instance, or comma-separated list
+ *                              of URLs to try in order (default: http://localhost:8080)
+ *   SEARXNG_API_KEY          – Optional HTTP Basic auth password (username is always "searxng")
+ *   SEARXNG_DEFAULT_LANG     – Default search language (default: en)
+ *   SEARXNG_TIMEOUT_MS       – Timeout for the SearXNG query itself (default: 15000)
+ *   FETCH_URL_TIMEOUT_MS     – Per-URL fetch timeout when extracting page content (default: 8000)
+ *   TOOL_BUDGET_MS           – Hard wall-clock budget for an entire search tool call.
+ *                              On overrun, partial results are returned with a
+ *                              "budget exceeded" marker on the unfinished fetches (default: 25000)
+ *   MAX_OUTPUT_CHARS         – Hard cap on tool response length. Sources list is
+ *                              always preserved; per-result blocks are trimmed
+ *                              with a truncation notice (default: 20000)
+ *   EXPOSE_LEGACY_TOOL_NAMES – When "false", suppresses the deprecated tool
+ *                              aliases (cited_search, cited_news_search,
+ *                              cited_science_search). Default: enabled.
+ *   MCP_TRANSPORT            – "stdio" (default) or "http" for remote access via Streamable HTTP
+ *   MCP_HOST                 – Bind host for http transport (default: 127.0.0.1)
+ *   MCP_PORT                 – Bind port for http transport (default: 3333)
  */
 
 import { createServer } from "node:http";
@@ -42,6 +53,15 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
+import {
+  loadDomainClasses,
+  enrichResultWithClassification,
+  detectDOIInFullContent,
+  rankResults,
+  badgeFor,
+} from "./lib/source-classifier.js";
+
+const DOMAIN_CLASSES_PATH = new URL("./domain-classes.yml", import.meta.url);
 
 // ---------------------------------------------------------------------------
 // Config
@@ -56,6 +76,19 @@ const SEARXNG_URLS = (process.env.SEARXNG_URL || "http://localhost:8080")
   .filter(Boolean);
 const SEARXNG_API_KEY = process.env.SEARXNG_API_KEY || "";
 const DEFAULT_LANG = process.env.SEARXNG_DEFAULT_LANG || "en";
+
+// Numeric env vars: parse with sensible defaults; reject NaN / non-positive values.
+function intEnv(name, fallback) {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+const SEARXNG_TIMEOUT_MS = intEnv("SEARXNG_TIMEOUT_MS", 15000);
+const FETCH_URL_TIMEOUT_MS = intEnv("FETCH_URL_TIMEOUT_MS", 8000);
+const TOOL_BUDGET_MS = intEnv("TOOL_BUDGET_MS", 25000);
+const MAX_OUTPUT_CHARS = intEnv("MAX_OUTPUT_CHARS", 20000);
+const EXPOSE_LEGACY_TOOL_NAMES = process.env.EXPOSE_LEGACY_TOOL_NAMES !== "false";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -158,7 +191,7 @@ async function querySearXNG({
     try {
       const resp = await fetch(url, {
         headers: buildHeaders(),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
       });
       if (!resp.ok) {
         const body = await resp.text().catch(() => "");
@@ -199,15 +232,18 @@ async function querySearXNG({
  *   ### Sources
  *   - (example.com) [Title](URL)
  */
-export function formatCitedResults(results, query) {
+export function formatCitedResults(results, query, opts = {}) {
   if (!results || results.length === 0) {
     return `No results found for "${query}".`;
   }
 
+  const maxChars = opts.maxChars ?? MAX_OUTPUT_CHARS;
   const labels = buildCitationLabels(results);
-  const lines = [`## Search results for: "${query}"\n`];
+  const header = `## Search results for: "${query}"\n`;
 
-  results.forEach((r, i) => {
+  // Build each result's block independently so we can drop whole blocks
+  // from the tail when the total exceeds maxChars.
+  const blocks = results.map((r, i) => {
     const label = labels[i];
     const title = r.title || "(no title)";
     const url = r.url || "";
@@ -219,7 +255,12 @@ export function formatCitedResults(results, query) {
       typeof r.bestScore === "number"
         ? ` _(relevance: ${r.bestScore.toFixed(3)})_`
         : "";
+
+    const lines = [];
     lines.push(`**(${label}) ${title}**${publishedDate}${engine}${scoreTag}`);
+    const badge = badgeFor(r.source_class);
+    if (badge) lines.push(`_${badge}_`);
+    if (r.doi_detected) lines.push(`DOI: ${r.doi_detected}`);
     lines.push(`${url}`);
     if (snippet) lines.push(`${snippet}`);
 
@@ -232,7 +273,7 @@ export function formatCitedResults(results, query) {
       });
       lines.push(`</highlights>`);
     } else if (r.fullContent) {
-      // Highlights step skipped (embedder unavailable) — fall back to full content.
+      // Highlights step skipped (embedder unavailable) → fall back to full content.
       lines.push("");
       lines.push(`<content source="(${label})">`);
       lines.push(r.fullContent);
@@ -240,22 +281,25 @@ export function formatCitedResults(results, query) {
     } else if (r.fetchError) {
       lines.push(`_(content fetch failed: ${r.fetchError})_`);
     }
-    lines.push("");
+    return lines.join("\n");
   });
 
-  // Dedicated sources block for easy copy-paste citation
-  lines.push("---");
-  lines.push("### Sources");
-  lines.push("");
+  // Sources block — never dropped; citations matter more than full body text.
+  const sourcesLines = ["---", "### Sources", ""];
   results.forEach((r, i) => {
     const label = labels[i];
     const title = r.title || "(no title)";
     const url = r.url || "";
-    lines.push(`- (${label}) [${title}](${url})`);
+    const mark =
+      r.source_class === "aggregator"
+        ? " ⚠️ aggregator"
+        : r.source_class === "suspect"
+        ? " ⚠️⚠️ suspect"
+        : "";
+    sourcesLines.push(`- (${label}) [${title}](${url})${mark}`);
   });
-
-  lines.push("");
-  lines.push(
+  sourcesLines.push("");
+  sourcesLines.push(
     "_Cite each specific fact inline as a clickable markdown link: `[(label)](url)` — " +
       "where `label` is the parenthesised identifier shown next to each result above " +
       "(domain name, sometimes with a short title slug). " +
@@ -263,8 +307,43 @@ export function formatCitedResults(results, query) {
       "[(example.org)](https://example.org/lba).\" Take the URL from the matching " +
       "Sources entry above. Answer naturally; only cite when quoting a specific claim._"
   );
+  const sourcesText = sourcesLines.join("\n");
 
-  return lines.join("\n");
+  const joinAll = (kept, truncated) =>
+    [
+      header,
+      kept.join("\n\n"),
+      truncated
+        ? "\n_… output truncated; lower `fetch_top_n`, `content_max_length` or `highlight_top_k` to scope further._\n"
+        : "",
+      sourcesText,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+  // Fast path: no cap or already small enough.
+  const full = joinAll(blocks, false);
+  if (!maxChars || full.length <= maxChars) return full;
+
+  // Trim blocks from the tail until the total fits. Always keep the sources
+  // block intact. If even the first block would overflow, slice it.
+  const overheadBudget = header.length + sourcesText.length + 200; // truncation notice + separators
+  const bodyBudget = maxChars - overheadBudget;
+
+  const kept = [];
+  let used = 0;
+  for (const b of blocks) {
+    const cost = b.length + 2; // block + "\n\n" separator
+    if (used + cost > bodyBudget) break;
+    kept.push(b);
+    used += cost;
+  }
+  if (kept.length === 0 && blocks.length > 0) {
+    const slice = blocks[0].slice(0, Math.max(0, bodyBudget));
+    kept.push(slice);
+  }
+
+  return joinAll(kept, true);
 }
 
 /**
@@ -292,34 +371,86 @@ export function stripHtmlToText(raw) {
     .trim();
 }
 
+// Compose multiple AbortSignals into one. Falls back to a manual combiner
+// on Node 18 (AbortSignal.any landed in Node 20.3). The returned signal
+// aborts as soon as any input signal aborts.
+function anySignal(signals) {
+  const valid = signals.filter(Boolean);
+  if (!valid.length) return undefined;
+  if (typeof AbortSignal.any === "function") return AbortSignal.any(valid);
+  const controller = new AbortController();
+  for (const s of valid) {
+    if (s.aborted) {
+      controller.abort(s.reason);
+      break;
+    }
+    s.addEventListener("abort", () => controller.abort(s.reason), { once: true });
+  }
+  return controller.signal;
+}
+
 /**
  * Fetch a URL and return readable plain text. Uses Mozilla Readability
  * (the engine behind Firefox Reader Mode) for HTML, with a regex-based
  * fallback. Plain text and JSON are returned as-is.
+ *
+ * Accepts either a positional `maxLength` (legacy signature) or an options
+ * object `{ maxLength, signal, timeoutMs }`. The composed signal aborts when
+ * either the caller's `signal` or a per-fetch `AbortSignal.timeout(timeoutMs)`
+ * fires.
  */
-async function fetchUrlContent(url, maxLength = 15000) {
+async function fetchUrlContent(url, opts = {}) {
+  // Legacy positional signature: fetchUrlContent(url, 15000)
+  if (typeof opts === "number") opts = { maxLength: opts };
+  const maxLength = opts.maxLength ?? 15000;
+  const timeoutMs = opts.timeoutMs ?? FETCH_URL_TIMEOUT_MS;
+  const signal = anySignal([opts.signal, AbortSignal.timeout(timeoutMs)]);
+
   const resp = await fetch(url, {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (compatible; SearXNG-Cited-MCP/1.0; +https://github.com/leiverkus/searxng-cited-mcp)",
-      Accept: "text/html,application/xhtml+xml,text/plain",
+      Accept: "text/html,application/xhtml+xml,text/plain,application/pdf",
     },
     redirect: "follow",
-    signal: AbortSignal.timeout(15000),
+    signal,
   });
 
   if (!resp.ok) {
     throw new Error(`HTTP ${resp.status} when fetching ${url}`);
   }
 
-  const contentType = resp.headers.get("content-type") || "";
+  const contentType = (resp.headers.get("content-type") || "").toLowerCase();
+
+  // PDF — buffer the body and hand to pdf-parse. Lazy-import keeps the cost
+  // off the cold path of tools that never see a PDF.
+  if (contentType.includes("application/pdf") || /\.pdf(\?|#|$)/.test(url.toLowerCase())) {
+    try {
+      const buf = Buffer.from(await resp.arrayBuffer());
+      const { default: pdfParse } = await import("pdf-parse");
+      const parsed = await pdfParse(buf);
+      const text = (parsed.text || "").replace(/\n{3,}/g, "\n\n").trim();
+      if (!text) {
+        return { text: "", contentType, extractionStatus: "failed_pdf" };
+      }
+      return { text: text.slice(0, maxLength), contentType, extractionStatus: "ok" };
+    } catch (err) {
+      return {
+        text: "",
+        contentType,
+        extractionStatus: "failed_pdf",
+        error: (err?.message || String(err)).slice(0, 120),
+      };
+    }
+  }
+
   const raw = await resp.text();
 
   if (
     contentType.includes("text/plain") ||
     contentType.includes("application/json")
   ) {
-    return raw.slice(0, maxLength);
+    return { text: raw.slice(0, maxLength), contentType, extractionStatus: "ok" };
   }
 
   let extracted = "";
@@ -342,7 +473,11 @@ async function fetchUrlContent(url, maxLength = 15000) {
     extracted = stripHtmlToText(raw);
   }
 
-  return extracted.slice(0, maxLength);
+  return {
+    text: extracted.slice(0, maxLength),
+    contentType,
+    extractionStatus: "ok",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -495,32 +630,85 @@ async function rankAndExtractHighlights(query, results, { topK, chunkSize }) {
  * semantically and replace the full content with the top-K passages.
  *
  * Failures per URL are recorded on the result but never abort the batch.
+ *
+ * The whole operation is bounded by `budgetMs` wall-clock. When the budget
+ * is reached, any still-running fetches are aborted and surface as
+ * `fetchError: "budget exceeded"`; if the budget is already gone before the
+ * reranking step, reranking is skipped and snippets are used instead.
  */
-async function enrichResultsWithContent(
+export async function enrichResultsWithContent(
   results,
-  { topN, maxLength, query, highlights = true, highlightTopK = 3, chunkSize = 500 }
+  {
+    topN,
+    maxLength,
+    query,
+    highlights = true,
+    highlightTopK = 3,
+    chunkSize = 500,
+    budgetMs = TOOL_BUDGET_MS,
+    fetchTimeoutMs = FETCH_URL_TIMEOUT_MS,
+  }
 ) {
   if (!results.length || topN <= 0) return results;
 
   const top = results.slice(0, topN);
-  const fetched = await Promise.allSettled(
-    top.map((r) => fetchUrlContent(r.url, maxLength))
+
+  const deadlineController = new AbortController();
+  const timer = setTimeout(
+    () => deadlineController.abort(new Error("budget exceeded")),
+    Math.max(1, budgetMs)
   );
+
+  let fetched;
+  try {
+    fetched = await Promise.allSettled(
+      top.map((r) =>
+        fetchUrlContent(r.url, {
+          maxLength,
+          signal: deadlineController.signal,
+          timeoutMs: fetchTimeoutMs,
+        })
+      )
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const budgetGone = deadlineController.signal.aborted;
 
   let out = results.map((r, i) => {
     if (i >= topN) return r;
     const f = fetched[i];
     if (f.status === "fulfilled" && f.value) {
-      return { ...r, fullContent: f.value };
+      const { text, contentType, extractionStatus } = f.value;
+      const enriched = {
+        ...r,
+        content_type: contentType || undefined,
+        content_extraction: extractionStatus,
+      };
+      if (text) enriched.fullContent = text;
+      // Re-run DOI detection on the extracted full text if we didn't catch
+      // one from title/snippet — DOIs often only appear in the article body.
+      return detectDOIInFullContent(enriched);
     }
-    const reason =
+    const rawReason =
       f.status === "rejected"
         ? f.reason?.message || String(f.reason)
         : "empty";
-    return { ...r, fetchError: reason.slice(0, 120) };
+    // Abort signals surface as "aborted" or "The operation was aborted" depending
+    // on platform; map them to a clearer label when the budget is the cause.
+    const reason =
+      budgetGone && /abort/i.test(rawReason) ? "budget exceeded" : rawReason;
+    return {
+      ...r,
+      fetchError: reason.slice(0, 120),
+      content_extraction: "fetch_failed",
+    };
   });
 
-  if (highlights && query) {
+  // Skip semantic rerank if the budget is already gone — embedding adds another
+  // 0.5–2s and we'd rather return what we have than blow further past the deadline.
+  if (highlights && query && !budgetGone) {
     try {
       out = await rankAndExtractHighlights(query, out, {
         topK: highlightTopK,
@@ -546,7 +734,7 @@ async function enrichResultsWithContent(
 function createMcpServer() {
   const server = new McpServer({
     name: "searxng-cited",
-    version: "1.1.0",
+    version: "1.4.0",
   });
 
   registerTools(server);
@@ -554,315 +742,390 @@ function createMcpServer() {
 }
 
 function registerTools(server) {
-// --- Tool: cited_search ---------------------------------------------------
+// Shared parameter fragments. Defining them as plain values lets us reuse the
+// exact same Zod nodes across the new name and the deprecated alias for each
+// search tool without re-allocating.
+
+const langDescDefault = `Language code, e.g. 'en', 'de', 'fr' (default: ${DEFAULT_LANG})`;
+
+// Classification + ranking pass applied to every SearXNG response before
+// content enrichment. Loads domain-classes.yml (cached) and tags each result
+// with `source_class`, `doi_detected`, `oa_url_heuristic`. Reorders so
+// primary-publisher and academic-repository hits get the fetch budget first.
+const applyDetectionLayer = (results, prioritizePrimary) => {
+  const classes = loadDomainClasses(DOMAIN_CLASSES_PATH);
+  const classified = results.map((r) =>
+    enrichResultWithClassification(r, classes)
+  );
+  return rankResults(classified, { prioritizePrimary });
+};
+
+const sharedSearchSchema = {
+  engines: z
+    .string()
+    .optional()
+    .describe(
+      "Comma-separated SearXNG engines, e.g. 'google,bing' or 'semantic_scholar,arxiv'. Overrides category-default engines when set."
+    ),
+  language: z.string().optional().describe(langDescDefault),
+  time_range: z
+    .enum(["day", "week", "month", "year"])
+    .optional()
+    .describe("Filter results by time range"),
+  fetch_content: z
+    .boolean()
+    .optional()
+    .describe(
+      "Fetch and extract full page content for the top results (default: true). Set false to get only snippets."
+    ),
+  highlights: z
+    .boolean()
+    .optional()
+    .describe(
+      "Semantically rerank fetched content and return top passages instead of full text (default: true). Set false for raw extracted content."
+    ),
+  highlight_top_k: z
+    .number()
+    .min(1)
+    .max(10)
+    .optional()
+    .describe("Top passages per result (default: 3)"),
+  prioritize_primary: z
+    .boolean()
+    .optional()
+    .describe(
+      "Reorder results so primary-publisher and academic-repository hits come first; aggregator and suspect hits are pushed to the bottom (default: true). Set false to keep SearXNG's native ordering."
+    ),
+};
+
+// --- Tool: web_search (was cited_search) ----------------------------------
+
+const webSearchSchema = {
+  query: z.string().describe("Search query"),
+  categories: z
+    .enum([
+      "general",
+      "news",
+      "science",
+      "it",
+      "images",
+      "videos",
+      "files",
+      "map",
+    ])
+    .optional()
+    .describe("SearXNG category (default: general)"),
+  engines: sharedSearchSchema.engines,
+  language: sharedSearchSchema.language,
+  time_range: sharedSearchSchema.time_range,
+  max_results: z
+    .number()
+    .min(1)
+    .max(30)
+    .optional()
+    .describe("Maximum number of results (default: 10)"),
+  page: z
+    .number()
+    .min(1)
+    .optional()
+    .describe("Page number for pagination (default: 1)"),
+  fetch_content: sharedSearchSchema.fetch_content,
+  fetch_top_n: z
+    .number()
+    .min(0)
+    .max(10)
+    .optional()
+    .describe(
+      "How many top results to enrich with page content (default: 5)"
+    ),
+  content_max_length: z
+    .number()
+    .min(500)
+    .max(20000)
+    .optional()
+    .describe("Per-result content character cap (default: 2500)"),
+  highlights: sharedSearchSchema.highlights,
+  highlight_top_k: sharedSearchSchema.highlight_top_k,
+  prioritize_primary: sharedSearchSchema.prioritize_primary,
+};
+
+const webSearchDesc = `Use this tool for general web searches (websites, blogs, documentation, encyclopedias).
+Top results are fetched via SearXNG, extracted with Readability, and semantically reranked
+against the query — returning the most relevant passages ("highlights") rather than full pages.
+Cite sources with (label) markers when quoting specific facts.
+
+Every result carries detection signals you can route on:
+  - source_class: primary_publisher | academic_repository | preprint_server | aggregator | suspect | grey_lit_or_unknown
+  - doi_detected: first DOI found in title/snippet/full text (string), plus doi_candidates[] if multiple
+  - oa_url_heuristic: "likely" | "maybe" | "no" — open-access guess from the URL alone (no Unpaywall call)
+  - content_type / content_extraction: HTTP Content-Type + "ok" | "failed_pdf" | "fetch_failed"
+Aggregator and suspect results are visibly ⚠️-marked. When doi_detected is set, prefer
+calling paper-search-mcp (Crossref / Unpaywall) to verify metadata rather than trusting
+snippet text. No external API calls are made by this tool beyond SearXNG and the result URLs.`;
+
+const webSearchHandler = async (args) => {
+  try {
+    const data = await querySearXNG({
+      query: args.query,
+      categories: args.categories || "general",
+      engines: args.engines,
+      language: args.language || DEFAULT_LANG,
+      timeRange: args.time_range,
+      page: args.page || 1,
+      maxResults: args.max_results || 10,
+    });
+
+    let results = data.results || [];
+    results = applyDetectionLayer(
+      results,
+      args.prioritize_primary !== false
+    );
+    const fetchContent = args.fetch_content !== false;
+    if (fetchContent) {
+      results = await enrichResultsWithContent(results, {
+        topN: args.fetch_top_n ?? 5,
+        maxLength: args.content_max_length ?? 2500,
+        query: args.query,
+        highlights: args.highlights !== false,
+        highlightTopK: args.highlight_top_k ?? 3,
+      });
+    }
+
+    const text = formatCitedResults(results, args.query);
+    return { content: [{ type: "text", text }] };
+  } catch (err) {
+    return {
+      content: [{ type: "text", text: `Search error: ${err.message}` }],
+      isError: true,
+    };
+  }
+};
+
+server.tool("web_search", webSearchDesc, webSearchSchema, webSearchHandler);
+
+// --- Tool: news_search (was cited_news_search) ----------------------------
+
+const newsSearchSchema = {
+  query: z.string().describe("News search query"),
+  engines: z
+    .string()
+    .optional()
+    .describe(
+      "Comma-separated SearXNG engines, e.g. 'reuters,bbc'. Overrides default news engines when set."
+    ),
+  language: sharedSearchSchema.language,
+  time_range: z
+    .enum(["day", "week", "month", "year"])
+    .optional()
+    .describe("Time filter (default: week)"),
+  max_results: z
+    .number()
+    .min(1)
+    .max(20)
+    .optional()
+    .describe("Maximum number of results (default: 10)"),
+  fetch_content: sharedSearchSchema.fetch_content,
+  fetch_top_n: z
+    .number()
+    .min(0)
+    .max(10)
+    .optional()
+    .describe("How many top results to enrich (default: 3)"),
+  content_max_length: z
+    .number()
+    .min(500)
+    .max(20000)
+    .optional()
+    .describe("Per-result content character cap (default: 2500)"),
+  highlights: sharedSearchSchema.highlights,
+  highlight_top_k: sharedSearchSchema.highlight_top_k,
+  prioritize_primary: sharedSearchSchema.prioritize_primary,
+};
+
+const newsSearchDesc = `Use this tool when the user asks about recent events, news, or current affairs.
+Results include publication dates, (label)-style citations, and (by default) extracted article
+text for the top results. Defaults to the last week; pass time_range to widen or narrow.
+
+Every result also carries detection signals: source_class, doi_detected (rare for news but
+present when an article references a paper), oa_url_heuristic, content_type. Aggregator
+and suspect domains are visibly ⚠️-marked.`;
+
+const newsSearchHandler = async (args) => {
+  try {
+    const data = await querySearXNG({
+      query: args.query,
+      categories: "news",
+      engines: args.engines,
+      language: args.language || DEFAULT_LANG,
+      timeRange: args.time_range || "week",
+      maxResults: args.max_results || 10,
+    });
+
+    let results = data.results || [];
+    results = applyDetectionLayer(
+      results,
+      args.prioritize_primary !== false
+    );
+    const fetchContent = args.fetch_content !== false;
+    if (fetchContent) {
+      results = await enrichResultsWithContent(results, {
+        topN: args.fetch_top_n ?? 3,
+        maxLength: args.content_max_length ?? 2500,
+        query: args.query,
+        highlights: args.highlights !== false,
+        highlightTopK: args.highlight_top_k ?? 3,
+      });
+    }
+
+    const text = formatCitedResults(results, args.query);
+    return { content: [{ type: "text", text }] };
+  } catch (err) {
+    return {
+      content: [{ type: "text", text: `News search error: ${err.message}` }],
+      isError: true,
+    };
+  }
+};
+
+server.tool("news_search", newsSearchDesc, newsSearchSchema, newsSearchHandler);
+
+// --- Tool: science_search (was cited_science_search) ----------------------
+
+const scienceSearchSchema = {
+  query: z.string().describe("Academic search query"),
+  engines: z
+    .string()
+    .optional()
+    .describe(
+      "Comma-separated SearXNG engines, e.g. 'semantic_scholar,arxiv,pubmed,google_scholar'. Overrides default science engines when set."
+    ),
+  language: z.string().optional().describe("Language code (default: en)"),
+  time_range: sharedSearchSchema.time_range,
+  max_results: z
+    .number()
+    .min(1)
+    .max(20)
+    .optional()
+    .describe("Maximum number of results (default: 10)"),
+  fetch_content: sharedSearchSchema.fetch_content,
+  fetch_top_n: z
+    .number()
+    .min(0)
+    .max(10)
+    .optional()
+    .describe("How many top results to enrich (default: 3)"),
+  content_max_length: z
+    .number()
+    .min(500)
+    .max(20000)
+    .optional()
+    .describe("Per-result content character cap (default: 2500)"),
+  highlights: sharedSearchSchema.highlights,
+  highlight_top_k: sharedSearchSchema.highlight_top_k,
+  prioritize_primary: sharedSearchSchema.prioritize_primary,
+};
+
+const scienceSearchDesc = `Use this tool for academic literature, peer-reviewed papers, and preprints
+(Google Scholar, Semantic Scholar, arXiv, PubMed, etc.). Ideal for literature review and
+citing scholarly sources. Results include (label)-style citations and (by default) extracted
+abstract/landing-page text. PDFs are parsed via pdf-parse when reachable.
+
+Every result carries detection signals:
+  - source_class: primary_publisher | academic_repository | preprint_server | aggregator | suspect | grey_lit_or_unknown
+  - doi_detected: first DOI found in title/snippet/full text (use this to call paper-search-mcp for Crossref/Unpaywall verification)
+  - oa_url_heuristic: "likely" | "maybe" | "no" (URL-based, no Unpaywall round-trip)
+  - content_type, content_extraction: "ok" | "failed_pdf" | "fetch_failed"
+
+Aggregator hits (academia.edu, researchgate.net, scribd.com, books.google.com, …) are
+⚠️-marked: treat them as leads, not as primary sources — the real DOI lives on the
+publisher domain. Suspect domains (creationist / pseudoscientific) are ⚠️⚠️-marked and
+must not be cited as scholarly sources.
+
+No external API calls are made by this tool beyond SearXNG and the result URLs themselves
+— DOI resolution belongs in paper-search-mcp to keep tool independence intact for
+cross-validation.`;
+
+const scienceSearchHandler = async (args) => {
+  try {
+    const data = await querySearXNG({
+      query: args.query,
+      categories: "science",
+      engines: args.engines,
+      language: args.language || "en",
+      timeRange: args.time_range,
+      maxResults: args.max_results || 10,
+    });
+
+    let results = data.results || [];
+    results = applyDetectionLayer(
+      results,
+      args.prioritize_primary !== false
+    );
+    const fetchContent = args.fetch_content !== false;
+    if (fetchContent) {
+      results = await enrichResultsWithContent(results, {
+        topN: args.fetch_top_n ?? 3,
+        maxLength: args.content_max_length ?? 2500,
+        query: args.query,
+        highlights: args.highlights !== false,
+        highlightTopK: args.highlight_top_k ?? 3,
+      });
+    }
+
+    const text = formatCitedResults(results, args.query);
+    return { content: [{ type: "text", text }] };
+  } catch (err) {
+    return {
+      content: [
+        { type: "text", text: `Science search error: ${err.message}` },
+      ],
+      isError: true,
+    };
+  }
+};
 
 server.tool(
-  "cited_search",
-  `Web search via a local SearXNG instance. Top results are fetched, extracted with
-Readability, and semantically reranked against the query — returning the most relevant
-passages ("highlights") rather than full pages. Cite sources with (label) markers
-when quoting specific facts; for the response itself, prioritise the user's question and context.`,
-  {
-    query: z.string().describe("Search query"),
-    categories: z
-      .enum([
-        "general",
-        "news",
-        "science",
-        "it",
-        "images",
-        "videos",
-        "files",
-        "map",
-      ])
-      .optional()
-      .describe("SearXNG category (default: general)"),
-    engines: z
-      .string()
-      .optional()
-      .describe(
-        "Comma-separated SearXNG engines, e.g. 'google,bing' or 'semantic_scholar,arxiv'. Overrides category-default engines when set."
-      ),
-    language: z
-      .string()
-      .optional()
-      .describe(
-        `Language code, e.g. 'en', 'de', 'fr' (default: ${DEFAULT_LANG})`
-      ),
-    time_range: z
-      .enum(["day", "week", "month", "year"])
-      .optional()
-      .describe("Filter results by time range"),
-    max_results: z
-      .number()
-      .min(1)
-      .max(30)
-      .optional()
-      .describe("Maximum number of results (default: 10)"),
-    page: z
-      .number()
-      .min(1)
-      .optional()
-      .describe("Page number for pagination (default: 1)"),
-    fetch_content: z
-      .boolean()
-      .optional()
-      .describe(
-        "Fetch and extract full page content for the top results (default: true). Set false to get only snippets."
-      ),
-    fetch_top_n: z
-      .number()
-      .min(0)
-      .max(10)
-      .optional()
-      .describe("How many top results to enrich with page content (default: 10)"),
-    content_max_length: z
-      .number()
-      .min(500)
-      .max(20000)
-      .optional()
-      .describe("Per-result content character cap (default: 4000)"),
-    highlights: z
-      .boolean()
-      .optional()
-      .describe(
-        "Semantically rerank fetched content and return top passages instead of full text (default: true). Set false for raw extracted content."
-      ),
-    highlight_top_k: z
-      .number()
-      .min(1)
-      .max(10)
-      .optional()
-      .describe("Top passages per result (default: 3)"),
-  },
-  async (args) => {
-    try {
-      const data = await querySearXNG({
-        query: args.query,
-        categories: args.categories || "general",
-        engines: args.engines,
-        language: args.language || DEFAULT_LANG,
-        timeRange: args.time_range,
-        page: args.page || 1,
-        maxResults: args.max_results || 10,
-      });
-
-      let results = data.results || [];
-      const fetchContent = args.fetch_content !== false;
-      if (fetchContent) {
-        results = await enrichResultsWithContent(results, {
-          topN: args.fetch_top_n ?? 10,
-          maxLength: args.content_max_length ?? 4000,
-          query: args.query,
-          highlights: args.highlights !== false,
-          highlightTopK: args.highlight_top_k ?? 3,
-        });
-      }
-
-      const text = formatCitedResults(results, args.query);
-
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      return {
-        content: [{ type: "text", text: `Search error: ${err.message}` }],
-        isError: true,
-      };
-    }
-  }
+  "science_search",
+  scienceSearchDesc,
+  scienceSearchSchema,
+  scienceSearchHandler
 );
 
-// --- Tool: cited_news_search -----------------------------------------------
+// --- Deprecated aliases (will be removed in 2.0.0) ------------------------
+// Same handlers, same schemas, just the old names. The description starts
+// with the deprecation marker so LLMs prefer the new names when both are
+// listed. Set EXPOSE_LEGACY_TOOL_NAMES=false to suppress.
 
-server.tool(
-  "cited_news_search",
-  `Search recent news via SearXNG. Results include publication dates, (label)-style
-citations, and (by default) extracted article text for the top results.`,
-  {
-    query: z.string().describe("News search query"),
-    engines: z
-      .string()
-      .optional()
-      .describe(
-        "Comma-separated SearXNG engines, e.g. 'reuters,bbc'. Overrides default news engines when set."
-      ),
-    language: z
-      .string()
-      .optional()
-      .describe(`Language code (default: ${DEFAULT_LANG})`),
-    time_range: z
-      .enum(["day", "week", "month", "year"])
-      .optional()
-      .describe("Time filter (default: week)"),
-    max_results: z
-      .number()
-      .min(1)
-      .max(20)
-      .optional()
-      .describe("Maximum number of results (default: 10)"),
-    fetch_content: z
-      .boolean()
-      .optional()
-      .describe("Fetch and extract article text for the top results (default: true)"),
-    fetch_top_n: z
-      .number()
-      .min(0)
-      .max(10)
-      .optional()
-      .describe("How many top results to enrich (default: 3)"),
-    content_max_length: z
-      .number()
-      .min(500)
-      .max(20000)
-      .optional()
-      .describe("Per-result content character cap (default: 3000)"),
-    highlights: z
-      .boolean()
-      .optional()
-      .describe("Semantic rerank + top passages (default: true)"),
-    highlight_top_k: z
-      .number()
-      .min(1)
-      .max(10)
-      .optional()
-      .describe("Top passages per result (default: 3)"),
-  },
-  async (args) => {
-    try {
-      const data = await querySearXNG({
-        query: args.query,
-        categories: "news",
-        engines: args.engines,
-        language: args.language || DEFAULT_LANG,
-        timeRange: args.time_range || "week",
-        maxResults: args.max_results || 10,
-      });
-
-      let results = data.results || [];
-      const fetchContent = args.fetch_content !== false;
-      if (fetchContent) {
-        results = await enrichResultsWithContent(results, {
-          topN: args.fetch_top_n ?? 3,
-          maxLength: args.content_max_length ?? 3000,
-          query: args.query,
-          highlights: args.highlights !== false,
-          highlightTopK: args.highlight_top_k ?? 3,
-        });
-      }
-
-      const text = formatCitedResults(results, args.query);
-
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      return {
-        content: [
-          { type: "text", text: `News search error: ${err.message}` },
-        ],
-        isError: true,
-      };
-    }
-  }
-);
-
-// --- Tool: cited_science_search --------------------------------------------
-
-server.tool(
-  "cited_science_search",
-  `Search academic sources (Google Scholar, Semantic Scholar, arXiv, etc.) via SearXNG.
-Ideal for literature review. Results include (label)-style citations and (by default)
-extracted abstract/landing-page text for the top results. Note: PDF URLs and
-paywalled journal pages may fail to extract — the snippet remains available.`,
-  {
-    query: z.string().describe("Academic search query"),
-    engines: z
-      .string()
-      .optional()
-      .describe(
-        "Comma-separated SearXNG engines, e.g. 'semantic_scholar,arxiv,pubmed,google_scholar'. Overrides default science engines when set."
-      ),
-    language: z
-      .string()
-      .optional()
-      .describe("Language code (default: en)"),
-    time_range: z
-      .enum(["day", "week", "month", "year"])
-      .optional()
-      .describe("Time filter"),
-    max_results: z
-      .number()
-      .min(1)
-      .max(20)
-      .optional()
-      .describe("Maximum number of results (default: 10)"),
-    fetch_content: z
-      .boolean()
-      .optional()
-      .describe("Fetch and extract content for top results (default: true)"),
-    fetch_top_n: z
-      .number()
-      .min(0)
-      .max(10)
-      .optional()
-      .describe("How many top results to enrich (default: 3)"),
-    content_max_length: z
-      .number()
-      .min(500)
-      .max(20000)
-      .optional()
-      .describe("Per-result content character cap (default: 3000)"),
-    highlights: z
-      .boolean()
-      .optional()
-      .describe("Semantic rerank + top passages (default: true)"),
-    highlight_top_k: z
-      .number()
-      .min(1)
-      .max(10)
-      .optional()
-      .describe("Top passages per result (default: 3)"),
-  },
-  async (args) => {
-    try {
-      const data = await querySearXNG({
-        query: args.query,
-        categories: "science",
-        engines: args.engines,
-        language: args.language || "en",
-        timeRange: args.time_range,
-        maxResults: args.max_results || 10,
-      });
-
-      let results = data.results || [];
-      const fetchContent = args.fetch_content !== false;
-      if (fetchContent) {
-        results = await enrichResultsWithContent(results, {
-          topN: args.fetch_top_n ?? 3,
-          maxLength: args.content_max_length ?? 3000,
-          query: args.query,
-          highlights: args.highlights !== false,
-          highlightTopK: args.highlight_top_k ?? 3,
-        });
-      }
-
-      const text = formatCitedResults(results, args.query);
-
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      return {
-        content: [
-          { type: "text", text: `Science search error: ${err.message}` },
-        ],
-        isError: true,
-      };
-    }
-  }
-);
+if (EXPOSE_LEGACY_TOOL_NAMES) {
+  server.tool(
+    "cited_search",
+    `[deprecated, use web_search] ${webSearchDesc}`,
+    webSearchSchema,
+    webSearchHandler
+  );
+  server.tool(
+    "cited_news_search",
+    `[deprecated, use news_search] ${newsSearchDesc}`,
+    newsSearchSchema,
+    newsSearchHandler
+  );
+  server.tool(
+    "cited_science_search",
+    `[deprecated, use science_search] ${scienceSearchDesc}`,
+    scienceSearchSchema,
+    scienceSearchHandler
+  );
+}
 
 // --- Tool: fetch_url -------------------------------------------------------
+// Users invoke this on a specific URL they care about, so we keep the older
+// 15s per-request timeout (vs the tighter 8s default used in bulk enrichment).
 
 server.tool(
   "fetch_url",
-  `Fetch the content of a URL and return it as readable plain text.
-Useful for reading the full content of a search result.`,
+  `Use this tool to read the full content of a single specific URL — for example
+to follow up on a search result, or to retrieve a page the user linked. Returns
+readable plain text via Mozilla Readability with a regex fallback.`,
   {
     url: z.string().url().describe("URL of the web page to fetch"),
     max_length: z
@@ -874,12 +1137,20 @@ Useful for reading the full content of a search result.`,
   },
   async (args) => {
     try {
-      const text = await fetchUrlContent(args.url, args.max_length || 15000);
+      const result = await fetchUrlContent(args.url, {
+        maxLength: args.max_length || 15000,
+        timeoutMs: 15000,
+      });
+      const { text, contentType, extractionStatus } = result;
+      const note =
+        extractionStatus === "failed_pdf"
+          ? `\n\n_(Content-Type: ${contentType || "application/pdf"} — PDF text extraction failed.)_`
+          : "";
       return {
         content: [
           {
             type: "text",
-            text: `## Content from ${args.url}\n\n${text}`,
+            text: `## Content from ${args.url}\n\n${text}${note}`,
           },
         ],
       };
