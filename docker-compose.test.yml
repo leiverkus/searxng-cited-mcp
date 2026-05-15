@@ -1,12 +1,12 @@
 # Smoketest override: renames containers + remaps ports to avoid colliding
 # with a running prototype stack. Use with:
-#   docker compose -f docker-compose.yml -f docker-compose.test.yml -p cited-test up -d
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml -p dao-test up -d
 services:
   searxng:
     container_name: searxng-test
     ports: !override
       - "8889:8080"
-  searxng-cited-mcp:
-    container_name: searxng-cited-mcp-test
+  dao-searxng-mcp:
+    container_name: dao-searxng-mcp-test
     ports: !override
       - "127.0.0.1:3334:3333"

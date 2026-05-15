@@ -1,11 +1,11 @@
 {
-  "name": "searxng-cited-mcp",
-  "version": "1.4.1",
-  "description": "MCP server for SearXNG with structured, source-labelled citations — designed for AI coding agents",
+  "name": "dao-searxng-mcp",
+  "version": "1.5.0",
+  "description": "DAO SearXNG MCP — SearXNG-backed search for research agents, with structured citations and a per-result detection layer (DOI / source class / OA / content-type). Sibling of dao-paper-search-mcp.",
   "type": "module",
   "main": "index.js",
   "bin": {
-    "searxng-cited-mcp": "./index.js"
+    "dao-searxng-mcp": "./index.js"
   },
   "scripts": {
     "start": "node index.js",
@@ -23,7 +23,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/leiverkus/searxng-cited-mcp"
+    "url": "https://github.com/leiverkus/dao-searxng-mcp"
   },
   "author": "Patrick Leiverkus",
   "dependencies": {

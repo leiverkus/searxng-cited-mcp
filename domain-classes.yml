@@ -1,4 +1,4 @@
-# Domain classification for SearXNG-Cited-MCP detection layer.
+# Domain classification for DAO SearXNG MCP detection layer.
 #
 # Patterns are glob-style hostnames with right-anchored matching:
 #   - "*.cambridge.org"  matches "journals.cambridge.org" and "www.cambridge.org"

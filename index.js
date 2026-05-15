@@ -15,14 +15,18 @@ for (const m of ["log", "info", "warn", "error", "debug"]) {
 }
 
 /**
- * SearXNG Cited MCP Server
+ * DAO SearXNG MCP Server
  *
  * An MCP server that queries a local (or remote) SearXNG instance and returns
- * search results with source-labelled, structured citations. Designed for AI
- * coding agents (OpenCode, Claude Code, etc.) so the LLM can reference sources
- * with (label) markers — domain-derived identifiers like `(example.com)` or
- * `(en.wikipedia.org — Roman Empire)` — and produce a "Sources:" section at
- * the end of its response.
+ * search results with source-labelled, structured citations and a per-result
+ * detection layer (DOI / source class / OA / content-type). Designed for AI
+ * coding and research agents (OpenCode, Claude Code, etc.) so the LLM can
+ * reference sources with (label) markers — domain-derived identifiers like
+ * `(example.com)` or `(en.wikipedia.org — Roman Empire)` — and produce a
+ * "Sources:" section at the end of its response.
+ *
+ * Sibling project: dao-paper-search-mcp (Crossref / Unpaywall / Semantic
+ * Scholar verification of the DOIs surfaced here).
  *
  * Environment variables:
  *   SEARXNG_URL              – Base URL of SearXNG instance, or comma-separated list
@@ -410,7 +414,7 @@ async function fetchUrlContent(url, opts = {}) {
   const resp = await fetch(url, {
     headers: {
       "User-Agent":
-        "Mozilla/5.0 (compatible; SearXNG-Cited-MCP/1.0; +https://github.com/leiverkus/searxng-cited-mcp)",
+        "Mozilla/5.0 (compatible; DAO-SearXNG-MCP/1.5; +https://github.com/leiverkus/dao-searxng-mcp)",
       Accept: "text/html,application/xhtml+xml,text/plain,application/pdf",
     },
     redirect: "follow",
@@ -734,8 +738,8 @@ export async function enrichResultsWithContent(
 // per the SDK's stateless example. stdio mode reuses a single instance.
 function createMcpServer() {
   const server = new McpServer({
-    name: "searxng-cited",
-    version: "1.4.1",
+    name: "dao-searxng",
+    version: "1.5.0",
   });
 
   registerTools(server);
@@ -1194,7 +1198,7 @@ readable plain text via Mozilla Readability with a regex fallback.`,
 const entrypointPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
 const isMainModule =
   import.meta.url === `file://${entrypointPath}` ||
-  entrypointPath.endsWith("/searxng-cited-mcp"); // npm bin shim
+  entrypointPath.endsWith("/dao-searxng-mcp"); // npm bin shim
 
 if (isMainModule) {
 
@@ -1252,7 +1256,7 @@ if (transportKind === "stdio") {
 
   httpServer.listen(port, host, () => {
     process.stderr.write(
-      `[http] searxng-cited-mcp listening on http://${host}:${port}/mcp\n`
+      `[http] dao-searxng-mcp listening on http://${host}:${port}/mcp\n`
     );
   });
 } else {

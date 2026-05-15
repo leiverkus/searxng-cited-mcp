@@ -1,6 +1,8 @@
-# searxng-cited-mcp
+# DAO SearXNG MCP
 
-An [MCP](https://modelcontextprotocol.io/) server that connects AI coding agents to a local [SearXNG](https://docs.searxng.org/) instance — with **structured, source-labelled citations** baked into every response.
+An [MCP](https://modelcontextprotocol.io/) server that connects AI coding and research agents to a local [SearXNG](https://docs.searxng.org/) instance — with **structured, source-labelled citations** and a per-result **detection layer** (DOI, source class, OA heuristic, content-type) baked into every response.
+
+Sibling project of [dao-paper-search-mcp](https://github.com/leiverkus/dao-paper-search-mcp): SearXNG-side covers general/news/science web search with detection signals, paper-search-side covers Crossref/Unpaywall/Semantic Scholar verification of DOIs surfaced here.
 
 Unlike generic search MCPs, this one is designed so the LLM can reference sources with `(hostname)` markers in its answer — e.g. `(example.com)` or `(en.wikipedia.org — Roman Empire)` when several results share the same domain — and produce a clean "Sources:" section at the end, similar to how Claude Code and Perplexity handle web search.
 
@@ -8,7 +10,7 @@ Unlike generic search MCPs, this one is designed so the LLM can reference source
 
 Most search MCP servers return raw results and leave citation formatting to the model. This works poorly with smaller or open-weight models (Qwen, Llama, Mistral, etc.) — they often drop URLs, hallucinate links, or skip citations entirely.
 
-**searxng-cited-mcp** solves this by:
+**dao-searxng-mcp** solves this by:
 
 - Returning results in a **pre-formatted layout with source-derived labels** the model can reference directly
 - Appending a ready-made **Sources block** with markdown links
@@ -109,11 +111,11 @@ The repo ships with a Docker Compose stack that brings up SearXNG and the MCP se
 
 ## Docker stack
 
-Spins up SearXNG and `searxng-cited-mcp` as two containers, sharing a private Docker network.
+Spins up SearXNG and `dao-searxng-mcp` as two containers, sharing a private Docker network.
 
 ```bash
-git clone https://github.com/leiverkus/searxng-cited-mcp.git
-cd searxng-cited-mcp
+git clone https://github.com/leiverkus/dao-searxng-mcp.git
+cd dao-searxng-mcp
 cp .env.example .env
 echo "SEARXNG_SECRET_KEY=$(openssl rand -hex 32)" >> .env
 cp searxng-config/settings.yml.example searxng-config/settings.yml
@@ -149,7 +151,7 @@ The pre-configured engines in `searxng-config/settings.yml.example` cover Google
   "mcpServers": {
     "searxng": {
       "command": "docker",
-      "args": ["exec", "-i", "searxng-cited-mcp", "node", "index.js"]
+      "args": ["exec", "-i", "dao-searxng-mcp", "node", "index.js"]
     }
   }
 }
@@ -162,15 +164,15 @@ The stack is portable — clone, set `.env`, `docker compose up -d`. To expose t
 ## Installation
 
 ```bash
-git clone https://github.com/leiverkus/searxng-cited-mcp.git
-cd searxng-cited-mcp
+git clone https://github.com/leiverkus/dao-searxng-mcp.git
+cd dao-searxng-mcp
 npm install
 ```
 
 Or install globally:
 
 ```bash
-npm install -g searxng-cited-mcp
+npm install -g dao-searxng-mcp
 ```
 
 ## Configuration
@@ -185,7 +187,7 @@ Add to your `opencode.json`:
     "searxng": {
       "type": "local",
       "command": "node",
-      "args": ["/path/to/searxng-cited-mcp/index.js"],
+      "args": ["/path/to/dao-searxng-mcp/index.js"],
       "env": {
         "SEARXNG_URL": "http://localhost:8080",
         "SEARXNG_DEFAULT_LANG": "en"
@@ -202,7 +204,7 @@ If installed globally via npm:
   "mcp": {
     "searxng": {
       "type": "local",
-      "command": "searxng-cited-mcp",
+      "command": "dao-searxng-mcp",
       "env": {
         "SEARXNG_URL": "http://localhost:8080"
       }
@@ -220,7 +222,7 @@ Add to your Claude Code MCP settings:
   "mcpServers": {
     "searxng": {
       "command": "node",
-      "args": ["/path/to/searxng-cited-mcp/index.js"],
+      "args": ["/path/to/dao-searxng-mcp/index.js"],
       "env": {
         "SEARXNG_URL": "http://localhost:8080"
       }
@@ -236,7 +238,7 @@ Add to your Claude Code MCP settings:
   "mcpServers": {
     "searxng": {
       "command": "npx",
-      "args": ["-y", "searxng-cited-mcp"],
+      "args": ["-y", "dao-searxng-mcp"],
       "env": {
         "SEARXNG_URL": "http://localhost:8080"
       }

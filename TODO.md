@@ -16,13 +16,13 @@ in [CHANGELOG.md](CHANGELOG.md).
 
 ## Adoption
 
-- [ ] Publish to npm registry — `npx searxng-cited-mcp` should just work
+- [ ] Publish to npm registry — `npx dao-searxng-mcp` should just work
       (the `bin` field in `package.json` is already correct). Steps:
       `npm login` → `npm publish --dry-run` (verify file list) →
       `npm publish --access public` → `git tag vX.Y.Z` → `git push --tags`
       → cut a GitHub Release from the tag using the matching CHANGELOG
       section as the body.
-- [ ] Publish a Docker image to GHCR (`ghcr.io/leiverkus/searxng-cited-mcp`)
+- [ ] Publish a Docker image to GHCR (`ghcr.io/leiverkus/dao-searxng-mcp`)
       so the Compose stack doesn't need a local build. Two parts: GitHub
       Actions workflow that builds on `v*` tags + pushes `:X.Y.Z` and
       `:latest`; and `docker-compose.yml` switched to `image: ghcr.io/…`

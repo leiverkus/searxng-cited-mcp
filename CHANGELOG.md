@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - 2026-05-15
+
+### Changed
+
+- **Rebranded to `dao-searxng-mcp`** to align with the sibling project
+  [dao-paper-search-mcp](https://github.com/leiverkus/dao-paper-search-mcp).
+  The two tools are designed to be used together: this one surfaces
+  DOIs and source-class signals from SearXNG; paper-search verifies
+  metadata against Crossref / Unpaywall / Semantic Scholar.
+- **MCP server name** changed from `searxng-cited` to `dao-searxng`.
+  Tool IDs as seen by MCP clients shift from `searxng-cited_web_search`
+  (etc.) to `dao-searxng_web_search`. The tool function names themselves
+  (`web_search`, `news_search`, `science_search`, `fetch_url`) are
+  unchanged — only the server-name prefix is different.
+- **npm package name** changed from `searxng-cited-mcp` to
+  `dao-searxng-mcp`. `npx dao-searxng-mcp` is the new invocation. The
+  old name is not on the npm registry, so there's nothing to deprecate
+  upstream.
+- **Docker service / container name** changed from `searxng-cited-mcp`
+  to `dao-searxng-mcp`. The `transformers-cache` named volume is
+  scoped to the compose project, so the rename means the first start
+  after upgrading downloads the ~25 MB MiniLM model again.
+- **GitHub repository URL** changed from
+  `github.com/leiverkus/searxng-cited-mcp` to
+  `github.com/leiverkus/dao-searxng-mcp`. GitHub serves automatic
+  redirects from the old URL for clones, issues, and PRs.
+
+### Migration
+
+For existing local installs:
+
+```bash
+# 1. Stop the running container (uses the old name).
+docker compose down
+
+# 2. Pull the rename commit.
+git pull
+
+# 3. Bring the stack back up with the new service name.
+docker compose up -d dao-searxng-mcp
+```
+
+For MCP client configs (OpenCode / Claude Code / Cursor etc.) update:
+  - container references: `searxng-cited-mcp` → `dao-searxng-mcp`
+  - path references: `/path/to/searxng-cited-mcp/index.js` →
+    `/path/to/dao-searxng-mcp/index.js`
+  - server-name in tool IDs: anywhere a prompt or rule mentions
+    `searxng-cited_*`, switch to `dao-searxng_*`.
+
 ## [1.4.1] - 2026-05-15
 
 ### Added

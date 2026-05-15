@@ -23,18 +23,18 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  searxng-cited-mcp:
+  dao-searxng-mcp:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: searxng-cited-mcp
+    container_name: dao-searxng-mcp
     restart: unless-stopped
     environment:
       - SEARXNG_URL=http://searxng:8080
       - SEARXNG_DEFAULT_LANG=${SEARXNG_DEFAULT_LANG:-en}
       # HTTP transport on :3333 by default (set in Dockerfile).
       # For stdio mode, override with MCP_TRANSPORT=stdio and use
-      #   docker exec -i searxng-cited-mcp node index.js
+      #   docker exec -i dao-searxng-mcp node index.js
       - MCP_TRANSPORT=${MCP_TRANSPORT:-http}
     ports:
       # Only relevant when MCP_TRANSPORT=http. Bind to 127.0.0.1 by default

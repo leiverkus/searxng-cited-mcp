@@ -1,11 +1,11 @@
-# Contributing to searxng-cited-mcp
+# Contributing to dao-searxng-mcp
 
 Thanks for your interest in contributing!
 
 ## Getting started
 
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/<your-user>/searxng-cited-mcp.git`
+2. Clone your fork: `git clone https://github.com/<your-user>/dao-searxng-mcp.git`
 3. Install dependencies: `npm install`
 4. Make sure you have a SearXNG instance running with JSON API enabled
 
