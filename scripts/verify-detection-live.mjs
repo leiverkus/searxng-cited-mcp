@@ -10,6 +10,7 @@ import {
   loadDomainClasses,
   enrichResultWithClassification,
   rankResults,
+  deduplicateResults,
 } from "../lib/source-classifier.js";
 import { formatCitedResults } from "../index.js";
 
@@ -47,13 +48,16 @@ const classes = loadDomainClasses(DOMAIN_CLASSES_PATH);
 const classified = (data.results || []).map((r) =>
   enrichResultWithClassification(r, classes)
 );
-const ranked = rankResults(classified).slice(0, 10);
+const ranked = rankResults(classified);
+const deduped = deduplicateResults(ranked);
+console.log(`After dedup: ${deduped.length} results (was ${ranked.length})\n`);
+const top = deduped.slice(0, 10);
 
 const classCount = {};
-for (const r of ranked) classCount[r.source_class] = (classCount[r.source_class] || 0) + 1;
+for (const r of top) classCount[r.source_class] = (classCount[r.source_class] || 0) + 1;
 console.log(`Top-10 class distribution: ${JSON.stringify(classCount)}\n`);
 
-const dois = ranked.filter((r) => r.doi_detected).map((r) => ({
+const dois = top.filter((r) => r.doi_detected).map((r) => ({
   doi: r.doi_detected,
   host: new URL(r.url).hostname,
 }));
@@ -62,7 +66,7 @@ for (const d of dois) console.log(`  - ${d.doi}  (on ${d.host})`);
 console.log("");
 
 console.log("## Per-result detection fields\n");
-for (const r of ranked) {
+for (const r of top) {
   console.log(`- ${new URL(r.url).hostname}`);
   console.log(`    source_class:     ${r.source_class}`);
   console.log(`    doi_detected:     ${r.doi_detected ?? "(none)"}`);
@@ -71,5 +75,5 @@ for (const r of ranked) {
 
 console.log("\n## Formatted text output (LLM-facing)\n");
 console.log("```");
-console.log(formatCitedResults(ranked, query));
+console.log(formatCitedResults(top, query));
 console.log("```");

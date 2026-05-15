@@ -39,8 +39,10 @@ in [CHANGELOG.md](CHANGELOG.md).
       max length)
 - [ ] Character-encoding detection in `fetchUrlContent` (some pages are
       ISO-8859-1 and currently get mangled)
-- [ ] Result deduplication: SearXNG sometimes returns the same URL from
-      multiple engines. Dedupe by URL and merge `engines` lists.
+- [x] Result deduplication: SearXNG sometimes returns the same URL from
+      multiple engines. Dedupe by URL and merge `engines` lists. — Shipped
+      in 1.4.1, extended to also dedup by DOI across different hosts so the
+      same study on cambridge.org + academia.edu + JSTOR collapses to one.
 - [ ] Integration test gated behind `SEARXNG_TEST_URL` env var that hits a
       real SearXNG instance and asserts the JSON contract
 

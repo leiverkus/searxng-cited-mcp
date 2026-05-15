@@ -58,6 +58,7 @@ import {
   enrichResultWithClassification,
   detectDOIInFullContent,
   rankResults,
+  deduplicateResults,
   badgeFor,
 } from "./lib/source-classifier.js";
 
@@ -734,7 +735,7 @@ export async function enrichResultsWithContent(
 function createMcpServer() {
   const server = new McpServer({
     name: "searxng-cited",
-    version: "1.4.0",
+    version: "1.4.1",
   });
 
   registerTools(server);
@@ -748,16 +749,19 @@ function registerTools(server) {
 
 const langDescDefault = `Language code, e.g. 'en', 'de', 'fr' (default: ${DEFAULT_LANG})`;
 
-// Classification + ranking pass applied to every SearXNG response before
-// content enrichment. Loads domain-classes.yml (cached) and tags each result
-// with `source_class`, `doi_detected`, `oa_url_heuristic`. Reorders so
-// primary-publisher and academic-repository hits get the fetch budget first.
-const applyDetectionLayer = (results, prioritizePrimary) => {
+// Classification + ranking + dedup pass applied to every SearXNG response
+// before content enrichment. Loads domain-classes.yml (cached) and tags each
+// result with `source_class`, `doi_detected`, `oa_url_heuristic`. Reorders
+// so primary-publisher and academic-repository hits get the fetch budget
+// first; dedup runs after ranking so when an aggregator and a primary
+// publisher share the same DOI, the primary version is the one kept.
+const applyDetectionLayer = (results, { prioritizePrimary, deduplicate } = {}) => {
   const classes = loadDomainClasses(DOMAIN_CLASSES_PATH);
   const classified = results.map((r) =>
     enrichResultWithClassification(r, classes)
   );
-  return rankResults(classified, { prioritizePrimary });
+  const ranked = rankResults(classified, { prioritizePrimary });
+  return deduplicate === false ? ranked : deduplicateResults(ranked);
 };
 
 const sharedSearchSchema = {
@@ -795,6 +799,12 @@ const sharedSearchSchema = {
     .optional()
     .describe(
       "Reorder results so primary-publisher and academic-repository hits come first; aggregator and suspect hits are pushed to the bottom (default: true). Set false to keep SearXNG's native ordering."
+    ),
+  deduplicate: z
+    .boolean()
+    .optional()
+    .describe(
+      "Collapse duplicate results that refer to the same work: same DOI (across different hosts) or same canonical URL (multi-engine repeats). Engines from collapsed duplicates are merged. Runs after `prioritize_primary`, so when a publisher and an aggregator share a DOI, the publisher version is kept. Default: true."
     ),
 };
 
@@ -847,6 +857,7 @@ const webSearchSchema = {
   highlights: sharedSearchSchema.highlights,
   highlight_top_k: sharedSearchSchema.highlight_top_k,
   prioritize_primary: sharedSearchSchema.prioritize_primary,
+  deduplicate: sharedSearchSchema.deduplicate,
 };
 
 const webSearchDesc = `Use this tool for general web searches (websites, blogs, documentation, encyclopedias).
@@ -859,9 +870,11 @@ Every result carries detection signals you can route on:
   - doi_detected: first DOI found in title/snippet/full text (string), plus doi_candidates[] if multiple
   - oa_url_heuristic: "likely" | "maybe" | "no" — open-access guess from the URL alone (no Unpaywall call)
   - content_type / content_extraction: HTTP Content-Type + "ok" | "failed_pdf" | "fetch_failed"
-Aggregator and suspect results are visibly ⚠️-marked. When doi_detected is set, prefer
-calling paper-search-mcp (Crossref / Unpaywall) to verify metadata rather than trusting
-snippet text. No external API calls are made by this tool beyond SearXNG and the result URLs.`;
+Aggregator and suspect results are visibly ⚠️-marked. Duplicate results referring to the
+same work (same DOI across hosts, or same canonical URL across engines) are collapsed by
+default; opt out with deduplicate=false. When doi_detected is set, prefer calling
+paper-search-mcp (Crossref / Unpaywall) to verify metadata rather than trusting snippet
+text. No external API calls are made by this tool beyond SearXNG and the result URLs.`;
 
 const webSearchHandler = async (args) => {
   try {
@@ -876,10 +889,10 @@ const webSearchHandler = async (args) => {
     });
 
     let results = data.results || [];
-    results = applyDetectionLayer(
-      results,
-      args.prioritize_primary !== false
-    );
+    results = applyDetectionLayer(results, {
+      prioritizePrimary: args.prioritize_primary !== false,
+      deduplicate: args.deduplicate !== false,
+    });
     const fetchContent = args.fetch_content !== false;
     if (fetchContent) {
       results = await enrichResultsWithContent(results, {
@@ -940,6 +953,7 @@ const newsSearchSchema = {
   highlights: sharedSearchSchema.highlights,
   highlight_top_k: sharedSearchSchema.highlight_top_k,
   prioritize_primary: sharedSearchSchema.prioritize_primary,
+  deduplicate: sharedSearchSchema.deduplicate,
 };
 
 const newsSearchDesc = `Use this tool when the user asks about recent events, news, or current affairs.
@@ -962,10 +976,10 @@ const newsSearchHandler = async (args) => {
     });
 
     let results = data.results || [];
-    results = applyDetectionLayer(
-      results,
-      args.prioritize_primary !== false
-    );
+    results = applyDetectionLayer(results, {
+      prioritizePrimary: args.prioritize_primary !== false,
+      deduplicate: args.deduplicate !== false,
+    });
     const fetchContent = args.fetch_content !== false;
     if (fetchContent) {
       results = await enrichResultsWithContent(results, {
@@ -1023,6 +1037,7 @@ const scienceSearchSchema = {
   highlights: sharedSearchSchema.highlights,
   highlight_top_k: sharedSearchSchema.highlight_top_k,
   prioritize_primary: sharedSearchSchema.prioritize_primary,
+  deduplicate: sharedSearchSchema.deduplicate,
 };
 
 const scienceSearchDesc = `Use this tool for academic literature, peer-reviewed papers, and preprints
@@ -1041,6 +1056,11 @@ Aggregator hits (academia.edu, researchgate.net, scribd.com, books.google.com, �
 publisher domain. Suspect domains (creationist / pseudoscientific) are ⚠️⚠️-marked and
 must not be cited as scholarly sources.
 
+Duplicate results referring to the same work (same DOI across different hosts, or same
+canonical URL across multiple engines) are collapsed by default — when an aggregator
+mirror and the publisher's primary copy share a DOI, the publisher version is the one
+kept. Opt out with deduplicate=false if you need the raw aggregated SearXNG result set.
+
 No external API calls are made by this tool beyond SearXNG and the result URLs themselves
 — DOI resolution belongs in paper-search-mcp to keep tool independence intact for
 cross-validation.`;
@@ -1057,10 +1077,10 @@ const scienceSearchHandler = async (args) => {
     });
 
     let results = data.results || [];
-    results = applyDetectionLayer(
-      results,
-      args.prioritize_primary !== false
-    );
+    results = applyDetectionLayer(results, {
+      prioritizePrimary: args.prioritize_primary !== false,
+      deduplicate: args.deduplicate !== false,
+    });
     const fetchContent = args.fetch_content !== false;
     if (fetchContent) {
       results = await enrichResultsWithContent(results, {

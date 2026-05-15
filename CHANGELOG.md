@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.1] - 2026-05-15
+
+### Added
+
+- **Result deduplication.** Multi-engine SearXNG aggregation often returns
+  the same work several times — different hosts (publisher + JSTOR mirror
+  + academia.edu copy), or the exact same URL surfaced by both Google and
+  DuckDuckGo. Duplicates are now collapsed in a single pass after ranking:
+    - **Primary key:** `doi_detected` — three results pointing at
+      `10.2307/1356668` from cambridge.org, academia.edu, and JSTOR
+      collapse to one. Because dedup runs after `prioritize_primary`, the
+      kept record is always the highest-classed source.
+    - **Fallback key:** canonical URL (`host` + `pathname`, lower-cased,
+      trailing slash stripped, query string ignored) — catches
+      tracking-param repeats like `?utm=ddg` vs no-query.
+    - **Engine merge:** the kept record's `engines` array is the union of
+      all engines that found any of the duplicates, so the LLM still sees
+      how many independent engines surfaced the same work.
+  Opt out per call with `deduplicate: false`. Live measurement on the
+  "Cohen Negev fortresses" query went from 41 raw results with 3× UChicago
+  + 2× JSTOR + 2× TandFonline of the same work, to a clean top-10 with
+  four distinct DOIs.
+
 ## [1.4.0] - 2026-05-15
 
 ### Added

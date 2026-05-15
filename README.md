@@ -88,6 +88,8 @@ Every search result is annotated with structured signals that the LLM can route 
 
 Results are reordered by class (primary > repository > unknown > aggregator > suspect) so the fetch budget hits the best sources first. Disable with `prioritize_primary: false`.
 
+Duplicates are then collapsed (same DOI across hosts, or same canonical URL across engines) — when an aggregator mirror and the publisher's primary copy share a DOI, the publisher version is kept and the aggregator's engines are merged into its `engines` array. Disable with `deduplicate: false`.
+
 When `doi_detected` is set on a result, the consuming LLM should call `paper-search-mcp` (or equivalent) with that DOI to verify metadata against Crossref, rather than trusting snippet text. This division of labor keeps this server independent of `paper-search-mcp`, so the two tools cross-validate each other.
 
 The domain lists in `domain-classes.yml` are right-anchor globs:

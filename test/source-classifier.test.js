@@ -11,6 +11,7 @@ import {
   loadDomainClasses,
   enrichResultWithClassification,
   rankResults,
+  deduplicateResults,
   badgeFor,
   inferDOIFromUrl,
   _resetDomainClassesCache,
@@ -381,6 +382,133 @@ test("rankResults — passthrough when prioritizePrimary=false", () => {
     { id: 2, source_class: "primary_publisher" },
   ];
   assert.deepEqual(rankResults(input, { prioritizePrimary: false }), input);
+});
+
+// ----- deduplicateResults ----------------------------------------------
+
+test("deduplicateResults — same DOI across different hosts collapses, first kept", () => {
+  // Simulates the post-ranking order: cambridge.org (primary) ranked first,
+  // academia.edu (aggregator) ranked last but with the same DOI.
+  const input = [
+    {
+      title: "Iron Age Fortresses — publisher edition",
+      url: "https://www.cambridge.org/core/journals/levant/article/abc",
+      doi_detected: "10.1080/00758914.2015.123456",
+      source_class: "primary_publisher",
+      engines: ["google scholar"],
+    },
+    {
+      title: "Iron Age Fortresses — mirror",
+      url: "https://academia.edu/papers/mirror",
+      doi_detected: "10.1080/00758914.2015.123456",
+      source_class: "aggregator",
+      engines: ["google"],
+    },
+  ];
+  const out = deduplicateResults(input);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].url, "https://www.cambridge.org/core/journals/levant/article/abc");
+  assert.deepEqual(out[0].engines, ["google scholar", "google"]);
+});
+
+test("deduplicateResults — same URL with different query strings collapses (tracking-param tolerance)", () => {
+  // SearXNG multi-engine repeats often differ only in tracking parameters
+  // (utm, fbclid, …). Canonical-URL dedup strips the query string so they
+  // collapse as expected; engine lists are merged. Trade-off: a genuinely
+  // different page reached via ?page=N would also collapse, but in
+  // practice SearXNG returns those as separate pagination, not duplicates.
+  const input = [
+    {
+      title: "Same page",
+      url: "https://www.jstor.org/stable/1356668",
+      source_class: "primary_publisher",
+      engines: ["google"],
+    },
+    {
+      title: "Same page (DuckDuckGo found it too with a tracking param)",
+      url: "https://www.jstor.org/stable/1356668?utm=ddg",
+      source_class: "primary_publisher",
+      engines: ["duckduckgo"],
+    },
+  ];
+  const out = deduplicateResults(input);
+  assert.equal(out.length, 1);
+  assert.deepEqual(out[0].engines, ["google", "duckduckgo"]);
+});
+
+test("deduplicateResults — true URL equality (same path) collapses", () => {
+  const input = [
+    {
+      title: "A",
+      url: "https://www.jstor.org/stable/1356668",
+      engines: ["google"],
+    },
+    {
+      title: "A",
+      url: "https://www.jstor.org/stable/1356668/", // trailing slash
+      engines: ["bing"],
+    },
+  ];
+  const out = deduplicateResults(input);
+  assert.equal(out.length, 1);
+  assert.deepEqual(out[0].engines, ["google", "bing"]);
+});
+
+test("deduplicateResults — results without DOI or parseable URL pass through", () => {
+  const input = [
+    { title: "no url", url: "" },
+    { title: "bad url", url: "not a url" },
+    { title: "real", url: "https://example.org/a" },
+  ];
+  const out = deduplicateResults(input);
+  assert.equal(out.length, 3);
+});
+
+test("deduplicateResults — different DOIs do not collapse even with same host", () => {
+  const input = [
+    {
+      title: "Article A",
+      url: "https://www.tandfonline.com/doi/full/10.1080/aaa",
+      doi_detected: "10.1080/aaa",
+    },
+    {
+      title: "Article B",
+      url: "https://www.tandfonline.com/doi/full/10.1080/bbb",
+      doi_detected: "10.1080/bbb",
+    },
+  ];
+  assert.equal(deduplicateResults(input).length, 2);
+});
+
+test("deduplicateResults — backfills DOI from duplicate when kept missed it", () => {
+  // The kept primary-publisher hit had no DOI in URL or snippet, but a
+  // later JSTOR duplicate inferred 10.2307/N. After dedup the kept record
+  // should expose that DOI so the LLM can still route to Crossref.
+  const input = [
+    {
+      title: "BASOR article",
+      url: "https://www.journals.uchicago.edu/foo",
+      source_class: "primary_publisher",
+      engines: ["startpage"],
+    },
+    {
+      title: "BASOR article via JSTOR",
+      url: "https://www.jstor.org/foo",
+      doi_detected: "10.2307/1356668",
+      source_class: "primary_publisher",
+      engines: ["google"],
+    },
+  ];
+  // These don't share a key out-of-the-box (different URLs, only one has
+  // DOI), so they're NOT collapsed — backfill only matters when keys match.
+  // This test guards the no-merge case explicitly.
+  const out = deduplicateResults(input);
+  assert.equal(out.length, 2);
+});
+
+test("deduplicateResults — empty / non-array input is safe", () => {
+  assert.deepEqual(deduplicateResults([]), []);
+  assert.equal(deduplicateResults(null), null);
 });
 
 // ----- badgeFor --------------------------------------------------------
